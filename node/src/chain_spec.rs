@@ -1,236 +1,56 @@
-use sp_core::{Pair, Public, sr25519};
+use sc_service::{ChainType, Properties};
 use wika_runtime::{
-	AccountId, BalancesConfig, GenesisConfig,
-	SudoConfig, SystemConfig, AuraConfig, GrandpaConfig, AuthoritiesConfig, WASM_BINARY, Signature
+	genesis_config_presets::{WIKA_MAINNET_PRESET, WIKA_TESTNET_PRESET},
+	WASM_BINARY,
 };
-use sp_runtime::traits::{Verify, IdentifyAccount};
-use sc_service::ChainType;
-use hex_literal::hex;
-
-
 
 /// Specialized `ChainSpec`. This is a specialization of the general Substrate ChainSpec type.
-pub type ChainSpec = sc_service::GenericChainSpec<GenesisConfig>;
+pub type ChainSpec = sc_service::GenericChainSpec;
 
-
-type AccountPublic = <Signature as Verify>::Signer;
-
-
-// Get Public and AccountID from seed.
-
-pub fn get_from_seed<TPublic: Public>(seed: &str) -> <TPublic::Pair as Pair>::Public {
-	TPublic::Pair::from_string(&format!("//{}", seed), None)
-		.expect("static values are valid; qed")
-		.public()
+/// Token metadata wallets read from `system_properties`.
+fn properties() -> Properties {
+	let mut p = Properties::new();
+	p.insert("tokenSymbol".into(), "WIKA".into());
+	p.insert("tokenDecimals".into(), 12.into());
+	p.insert("ss58Format".into(), 42.into());
+	p
 }
 
-pub fn get_account_id_from_seed<TPublic: Public>(seed: &str) -> AccountId where
-	AccountPublic: From<<TPublic::Pair as Pair>::Public>
-{
-	AccountPublic::from(get_from_seed::<TPublic>(seed)).into_account()
+fn builder(name: &str, id: &str, chain_type: ChainType, preset: &str) -> Result<ChainSpec, String> {
+	Ok(ChainSpec::builder(WASM_BINARY.ok_or_else(|| "Wasm runtime not available".to_string())?, None)
+		.with_name(name)
+		.with_id(id)
+		.with_chain_type(chain_type)
+		.with_protocol_id("wika")
+		.with_properties(properties())
+		.with_genesis_config_preset_name(preset)
+		.build())
 }
 
-
-
-// Get Public and AccountID from addresses.
-
-pub fn get_from_address<TPublic: Public>(address: &[u8; 32]) -> <TPublic::Pair as Pair>::Public {
-	<TPublic::Pair as Pair>::Public::from_slice(address)
-}
-
-pub fn get_account_id_from_address<TPublic: Public>(address: &[u8; 32]) -> AccountId where
-	AccountPublic: From<<TPublic::Pair as Pair>::Public>
-{
-	AccountPublic::from(get_from_address::<TPublic>(address)).into_account()
-}
-
-
-
-
-
-
-// Convert list of addresses to AccountID or authorities
-
-fn list_to_accounts(list: &Vec<([u8; 32],[u8; 32])>) -> Vec<AccountId> {
-	let mut ans: Vec<AccountId> = vec![] ;
-	for (addr, _) in list {
-		ans.push(get_account_id_from_address::<sr25519::Public>(&addr)) ;
-	}
-	ans
-}
-
-
-
-
-
-// TEST and MAIN initial node accounts
-
-const BALANCE_UNIT: u128 = 1000000000000 ;
-
-const INITIAL_AUTHORITIES_BALANCE: u128 = 1000 * BALANCE_UNIT;
-
-
-fn initial_nodes_dev() -> Vec<([u8; 32],[u8; 32])> {
-	vec![
-		// Alice
-		(
-			hex!("d43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d"),
-			hex!("88dc3417d5058ec4b4503e0c12ea1a0a89be200fe98922423d4334014fa6b0ee")
-		)
-	]
-}
-
-fn initial_nodes_test() -> Vec<([u8; 32],[u8; 32])> {
-	vec![
-		// testnode1
-		(
-			hex!("3277d22306435a4800ebc611216d301cb79d2166b7519a6bdf58b0b6fb523267"),
-			hex!("2bdb6dab53650339faa80a06fde1b27ea46cee14ee0523bfc43d6c37d64f933d")
-		) ,
-
-		// testnode2
-		(
-			hex!("d021327f24e3ee188449b9264cb401f94caea467656a505fae1fdb0f6eda523b"),
-			hex!("ced4ef1df5f05aabc0ae1f7d5ee499edf765291aa4f5efc0f0b074e059e0ef52")
-		)
-	]
-}
-
-fn initial_nodes_main() -> Vec<([u8; 32],[u8; 32])> {
-	vec![
-		// mainnode1
-		(
-			hex!("3277d22306435a4800ebc611216d301cb79d2166b7519a6bdf58b0b6fb523267"),
-			hex!("2bdb6dab53650339faa80a06fde1b27ea46cee14ee0523bfc43d6c37d64f933d")
-		) ,
-
-		// mainnode2
-		(
-			hex!("d021327f24e3ee188449b9264cb401f94caea467656a505fae1fdb0f6eda523b"),
-			hex!("ced4ef1df5f05aabc0ae1f7d5ee499edf765291aa4f5efc0f0b074e059e0ef52")
-		)
-	]
-}
-
-
-
-
-
-
-pub fn dev_config() -> Result<ChainSpec, String> {
-	let wasm_binary = WASM_BINARY.ok_or_else(|| "Development wasm not available".to_string())?;
-	let nodes = initial_nodes_dev() ;
-
-	Ok(ChainSpec::from_genesis(
-		"Wika Development Environment",
+pub fn development_chain_spec() -> Result<ChainSpec, String> {
+	builder(
+		"Wika Development",
 		"dev",
 		ChainType::Development,
-		move || wika_genesis(
-			wasm_binary,
-			get_account_id_from_seed::<sr25519::Public>("Alice"),
-			&nodes,
-			list_to_accounts(&nodes),
-			true,
-		),
-		// Bootnodes
-		vec![],
-		// Telemetry
-		None,
-		// Protocol ID
-		None,
-		// Properties
-		None,
-		// Extensions
-		None,
-	))
+		sp_genesis_builder::DEV_RUNTIME_PRESET,
+	)
 }
 
-pub fn test_config() -> Result<ChainSpec, String> {
-	let wasm_binary = WASM_BINARY.ok_or_else(|| "Development wasm not available".to_string())?;
-	let nodes = initial_nodes_test() ;
-
-	Ok(ChainSpec::from_genesis(
-		// Name
-		"Wika TestNet",
-		// ID
-		"test",
-		ChainType::Live,
-		move || wika_genesis(
-			wasm_binary,
-			get_account_id_from_address::<sr25519::Public>(&hex!("56442d2ddbace4927f284c799c0e706ce7e0df06f395e2c1bbfb967ece5cf053")),
-			&nodes,
-			list_to_accounts(&nodes),
-			true,
-		),
-		// Bootnodes
-		vec![],
-		// Telemetry
-		None,
-		// Protocol ID
-		None,
-		// Properties
-		None,
-		// Extensions
-		None,
-	))
+pub fn local_chain_spec() -> Result<ChainSpec, String> {
+	builder(
+		"Wika Local Testnet",
+		"local_testnet",
+		ChainType::Local,
+		sp_genesis_builder::LOCAL_TESTNET_RUNTIME_PRESET,
+	)
 }
 
-pub fn main_config() -> Result<ChainSpec, String> {
-	let wasm_binary = WASM_BINARY.ok_or_else(|| "Development wasm not available".to_string())?;
-	let nodes = initial_nodes_main() ;
-
-	Ok(ChainSpec::from_genesis(
-		"Wika MainNet",
-		"main",
-		ChainType::Live,
-		move || wika_genesis(
-			wasm_binary,
-			get_account_id_from_address::<sr25519::Public>(&hex!("a47f12db28111cfc0052494f434f4bf2cd316dcd13852d6f64e538d861c23534")),
-			&nodes,
-			list_to_accounts(&nodes),
-			true,
-		),
-		// Bootnodes
-		vec![],
-		// Telemetry
-		None,
-		// Protocol ID
-		None,
-		// Properties
-		None,
-		// Extensions
-		None,
-	))
+/// A fresh testnet with the original testnet authorities and sudo key.
+pub fn testnet_chain_spec() -> Result<ChainSpec, String> {
+	builder("Wika TestNet", "test", ChainType::Live, WIKA_TESTNET_PRESET)
 }
 
-/// Configure initial storage state for FRAME modules.
-fn wika_genesis(
-	wasm_binary: &[u8],
-	root_key: AccountId,
-	initial_authorities: &Vec<([u8; 32],[u8; 32])>,
-	endowed_accounts: Vec<AccountId>,
-	_enable_println: bool,
-) -> GenesisConfig {
-	GenesisConfig {
-		system: SystemConfig {
-			// Add Wasm runtime to storage.
-			code: wasm_binary.to_vec(),
-			changes_trie_config: Default::default(),
-		},
-		balances: BalancesConfig {
-			balances: endowed_accounts.iter().cloned().map(|k|(k, INITIAL_AUTHORITIES_BALANCE)).collect(),
-		},
-		aura: AuraConfig {
-			authorities: vec![],
-		},
-		grandpa: GrandpaConfig {
-			authorities: vec![],
-		},
-		sudo: SudoConfig {
-			key: root_key,
-		},
-		authorities: AuthoritiesConfig {
-			keys: initial_authorities.clone(),
-		},
-	}
+/// A fresh mainnet with the original mainnet authorities and sudo key.
+pub fn mainnet_chain_spec() -> Result<ChainSpec, String> {
+	builder("Wika MainNet", "main", ChainType::Live, WIKA_MAINNET_PRESET)
 }

@@ -1,15 +1,11 @@
-version: '3'
+# A single development node: Alice authors blocks and verifies URL ownership.
+#   docker compose up --build
+# RPC (HTTP and WebSocket) on ws://127.0.0.1:9944
 services:
   wika:
     build: .
-    image: x20ab/wikanode:latest
-    volumes:
-      - /var/db_wika:/var/db_wika
+    image: wika-node:latest
     ports:
       - 30333:30333
       - 9944:9944
-      - 9933:9933
-    command: --name "node_name" --bob --unsafe-ws-external --rpc-cors=all  --rpc-external --ws-external  --pruning archive
-             #--port 30333 
-             #--ws-port 9944 
-             #--rpc-port 9933 
+    command: --dev --rpc-external --rpc-cors=all

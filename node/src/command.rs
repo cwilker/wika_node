@@ -1,32 +1,15 @@
-// This file is part of Substrate.
-
-// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
-// SPDX-License-Identifier: Apache-2.0
-
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// 	http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 use crate::{
 	chain_spec,
 	cli::{Cli, Subcommand},
 	service,
 };
-use wika_runtime::Block;
-use sc_cli::{ChainSpec, Role, RuntimeVersion, SubstrateCli};
+use sc_cli::SubstrateCli;
 use sc_service::PartialComponents;
+use wika_runtime::Block;
 
 impl SubstrateCli for Cli {
 	fn impl_name() -> String {
-		"Substrate Node".into()
+		"Wika Node".into()
 	}
 
 	fn impl_version() -> String {
@@ -42,25 +25,23 @@ impl SubstrateCli for Cli {
 	}
 
 	fn support_url() -> String {
-		"support.anonymous.an".into()
+		"https://github.com/randombishop/wika_node/issues".into()
 	}
 
 	fn copyright_start_year() -> i32 {
-		2017
+		2021
 	}
 
 	fn load_spec(&self, id: &str) -> Result<Box<dyn sc_service::ChainSpec>, String> {
 		Ok(match id {
-			"" | "dev" => Box::new(chain_spec::dev_config()?),
-			"test" => Box::new(chain_spec::test_config()?),
-			"main" => Box::new(chain_spec::main_config()?),
-			path =>
-				Box::new(chain_spec::ChainSpec::from_json_file(std::path::PathBuf::from(path))?),
+			"dev" => Box::new(chain_spec::development_chain_spec()?),
+			"" | "local" => Box::new(chain_spec::local_chain_spec()?),
+			"test" => Box::new(chain_spec::testnet_chain_spec()?),
+			"main" => Box::new(chain_spec::mainnet_chain_spec()?),
+			path => {
+				Box::new(chain_spec::ChainSpec::from_json_file(std::path::PathBuf::from(path))?)
+			},
 		})
-	}
-
-	fn native_runtime_version(_: &Box<dyn ChainSpec>) -> &'static RuntimeVersion {
-		&wika_runtime::VERSION
 	}
 }
 
@@ -70,6 +51,7 @@ pub fn run() -> sc_cli::Result<()> {
 
 	match &cli.subcommand {
 		Some(Subcommand::Key(cmd)) => cmd.run(&cli),
+		#[allow(deprecated)]
 		Some(Subcommand::BuildSpec(cmd)) => {
 			let runner = cli.create_runner(cmd)?;
 			runner.sync_run(|config| cmd.run(config.chain_spec, config.network))
@@ -81,6 +63,10 @@ pub fn run() -> sc_cli::Result<()> {
 					service::new_partial(&config)?;
 				Ok((cmd.run(client, import_queue), task_manager))
 			})
+		},
+		Some(Subcommand::ExportChainSpec(cmd)) => {
+			let chain_spec = cli.load_spec(&cmd.chain)?;
+			cmd.run(chain_spec)
 		},
 		Some(Subcommand::ExportBlocks(cmd)) => {
 			let runner = cli.create_runner(cmd)?;
@@ -113,27 +99,32 @@ pub fn run() -> sc_cli::Result<()> {
 			runner.async_run(|config| {
 				let PartialComponents { client, task_manager, backend, .. } =
 					service::new_partial(&config)?;
-				Ok((cmd.run(client, backend), task_manager))
+				let aux_revert = Box::new(|client, _, blocks| {
+					sc_consensus_grandpa::revert(client, blocks)?;
+					Ok(())
+				});
+				Ok((cmd.run(client, backend, Some(aux_revert)), task_manager))
 			})
 		},
-		Some(Subcommand::Benchmark(cmd)) =>
-			if cfg!(feature = "runtime-benchmarks") {
-				let runner = cli.create_runner(cmd)?;
-
-				runner.sync_run(|config| cmd.run::<Block, service::Executor>(config))
-			} else {
-				Err("Benchmarking wasn't enabled when building the node. You can enable it with \
-				     `--features runtime-benchmarks`."
-					.into())
-			},
+		Some(Subcommand::ChainInfo(cmd)) => {
+			let runner = cli.create_runner(cmd)?;
+			runner.sync_run(|config| cmd.run::<Block>(&config))
+		},
 		None => {
 			let runner = cli.create_runner(&cli.run)?;
 			runner.run_node_until_exit(|config| async move {
-				match config.role {
-					Role::Light => service::new_light(config),
-					_ => service::new_full(config),
+				match config.network.network_backend {
+					sc_network::config::NetworkBackendType::Libp2p => service::new_full::<
+						sc_network::NetworkWorker<
+							wika_runtime::opaque::Block,
+							<wika_runtime::opaque::Block as sp_runtime::traits::Block>::Hash,
+						>,
+					>(config)
+					.map_err(sc_cli::Error::Service),
+					sc_network::config::NetworkBackendType::Litep2p =>
+						service::new_full::<sc_network::Litep2pNetworkBackend>(config)
+							.map_err(sc_cli::Error::Service),
 				}
-				.map_err(sc_cli::Error::Service)
 			})
 		},
 	}

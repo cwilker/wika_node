@@ -1,28 +1,19 @@
 [package]
-authors = ['randombishop']
-description = 'FRAME pallet to manage likes.'
-edition = '2018'
-homepage = 'https://www.wika.network'
-license = 'Unlicense'
-name = 'wika-traits'
-repository = 'https://github.com/randombishop/wika_node'
-version = '3.0.0'
+name = "wika-traits"
+description = "Interfaces shared between the Wika pallets."
+version = "4.0.0"
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+edition.workspace = true
+publish = false
 
-[package.metadata.docs.rs]
-targets = ['x86_64-unknown-linux-gnu']
-
+[lints]
+workspace = true
 
 [dependencies]
-frame-system = { default-features = false, path = '../../../substrate/frame/system' }
-sp-std = { default-features = false, path = '../../../substrate/primitives/std' }
-sp-consensus-aura = { default-features = false, path = "../../../substrate/primitives/consensus/aura" }
-pallet-grandpa = { default-features = false, path = "../../../substrate/frame/grandpa" }
 
 [features]
-default = ['std']
-std = [
-    'frame-system/std',
-    'sp-std/std',
-    "sp-consensus-aura/std",
-	"pallet-grandpa/std",
-]
+default = ["std"]
+std = []

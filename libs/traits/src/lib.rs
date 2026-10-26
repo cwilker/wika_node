@@ -1,23 +1,11 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use frame_system::Config ;
-use sp_std::vec::Vec;
-use sp_consensus_aura::sr25519::AuthorityId as AuraId;
-use pallet_grandpa::AuthorityId as GrandpaId;
+/// Who owns a URL. Implemented by the owners pallet and used by the likes
+/// pallet to pay authors and referrers.
+pub trait OwnershipRegistry<AccountId> {
+	/// The account that receives payments for URLs nobody has claimed.
+	fn pot_id() -> AccountId;
 
-pub trait OwnershipRegistry<T:Config> {
-
-    fn get_pot_id() -> T::AccountId ;
-
-    fn get_owner(url: &Vec<u8>) -> T::AccountId ;
-
-}
-
-
-pub trait AuthorityRegistry<T:Config> {
-
-    fn list_aura() -> Vec<AuraId> ;
-
-    fn list_grandpa() -> Vec<(GrandpaId, u64)> ;
-
+	/// The registered owner of `url`, or [`Self::pot_id`] when there is none.
+	fn owner_of(url: &[u8]) -> AccountId;
 }

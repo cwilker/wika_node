@@ -1,21 +1,29 @@
-use sc_cli::RunCmd;
-use structopt::StructOpt;
-
-#[derive(Debug, StructOpt)]
+#[derive(Debug, clap::Parser)]
 pub struct Cli {
-	#[structopt(subcommand)]
+	#[command(subcommand)]
 	pub subcommand: Option<Subcommand>,
 
-	#[structopt(flatten)]
-	pub run: RunCmd,
+	#[clap(flatten)]
+	pub run: sc_cli::RunCmd,
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, clap::Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum Subcommand {
 	/// Key management cli utilities
+	#[command(subcommand)]
 	Key(sc_cli::KeySubcommand),
+
 	/// Build a chain specification.
+	/// DEPRECATED: `build-spec` command will be removed after 1/04/2026. Use `export-chain-spec`
+	/// command instead.
+	#[deprecated(
+		note = "build-spec command will be removed after 1/04/2026. Use export-chain-spec command instead"
+	)]
 	BuildSpec(sc_cli::BuildSpecCmd),
+
+	/// Export the chain specification.
+	ExportChainSpec(sc_cli::ExportChainSpecCmd),
 
 	/// Validate blocks.
 	CheckBlock(sc_cli::CheckBlockCmd),
@@ -35,7 +43,6 @@ pub enum Subcommand {
 	/// Revert the chain to a previous state.
 	Revert(sc_cli::RevertCmd),
 
-	/// The custom benchmark subcommmand benchmarking runtime pallets.
-	#[structopt(name = "benchmark", about = "Benchmark runtime pallets.")]
-	Benchmark(frame_benchmarking_cli::BenchmarkCmd),
+	/// Db meta columns information.
+	ChainInfo(sc_cli::ChainInfoCmd),
 }

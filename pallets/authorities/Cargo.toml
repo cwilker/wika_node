@@ -1,47 +1,51 @@
 [package]
-authors = ['randombishop']
-description = 'FRAME pallet to manage URL ownership.'
-edition = '2018'
-homepage = 'https://www.wika.network'
-license = 'Unlicense'
-name = 'pallet-authorities'
-readme = 'README.md'
-repository = 'https://github.com/randombishop/wika_node'
-version = '3.0.0'
+name = "pallet-authorities"
+description = "FRAME pallet that lets sudo add, enable and disable block authors and finality voters."
+version = "4.0.0"
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+edition.workspace = true
+publish = false
 
-[package.metadata.docs.rs]
-targets = ['x86_64-unknown-linux-gnu']
+[lints]
+workspace = true
 
 [dependencies]
-# external dependencies
-parity-scale-codec = {version = '2.3.1', default-features = false, features = ['derive']}
-scale-info = { version = "1.0", default-features = false, features = ["derive"] }
-serde = { version = "1.0.101", optional = true, features = ["derive"] }
-# Substrate dependencies
-sp-std = {default-features = false, path = '../../../substrate/primitives/std'}
-sp-runtime = {default-features = false, path = '../../../substrate/primitives/runtime'}
-sp-core = {default-features = false, path = '../../../substrate/primitives/core'}
-sp-consensus-aura = { default-features = false, path = "../../../substrate/primitives/consensus/aura" }
-frame-support = {default-features = false, path = '../../../substrate/frame/support'}
-frame-system = {default-features = false, path = '../../../substrate/frame/system'}
-pallet-grandpa = { default-features = false, path = "../../../substrate/frame/grandpa" }
-# Wika libraries
-wika-traits = { default-features = false, path = '../../libs/traits' }
+codec = { features = ["derive"], workspace = true }
+scale-info = { features = ["derive"], workspace = true }
+frame-support = { workspace = true }
+frame-system = { workspace = true }
+pallet-aura = { workspace = true }
+pallet-grandpa = { workspace = true }
+sp-consensus-aura = { workspace = true }
+sp-consensus-grandpa = { workspace = true }
+sp-core = { workspace = true }
+sp-runtime = { workspace = true }
+
+[dev-dependencies]
+pallet-timestamp = { workspace = true, default-features = true }
+sp-io = { workspace = true, default-features = true }
 
 [features]
-default = ['std']
+default = ["std"]
 std = [
-	'parity-scale-codec/std',
-	'scale-info/std',
-    'serde/std',
-
-    'sp-std/std',
-	'sp-runtime/std',
-	'sp-core/std',
-	'sp-consensus-aura/std',
-	'frame-support/std',
-	'frame-system/std',
-    'pallet-grandpa/std',
-
-	'wika-traits/std'
+	"codec/std",
+	"frame-support/std",
+	"frame-system/std",
+	"pallet-aura/std",
+	"pallet-grandpa/std",
+	"scale-info/std",
+	"sp-consensus-aura/std",
+	"sp-consensus-grandpa/std",
+	"sp-core/std",
+	"sp-runtime/std",
+]
+try-runtime = [
+	"frame-support/try-runtime",
+	"frame-system/try-runtime",
+	"pallet-aura/try-runtime",
+	"pallet-grandpa/try-runtime",
+	"sp-runtime/try-runtime",
 ]

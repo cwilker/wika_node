@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p pallet-likes -p pallet-owners -p pallet-authorities
+      - run: cargo build --locked --release -p wika-node
+      - name: Smoke test a dev chain
+        run: |
+          ./target/release/wika-node --dev --tmp > node.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf -H 'Content-Type: application/json' \
+              -d '{"id":1,"jsonrpc":"2.0","method":"chain_getHeader"}' http://127.0.0.1:9944 \
+              | grep -q '"number":"0x[1-9a-f]' && exit 0
+            sleep 2
+          done
+          tail -50 node.log
+          exit 1
+
+  image:
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/wika-node:latest
