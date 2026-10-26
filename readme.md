@@ -68,7 +68,7 @@ validators/           JSON-RPC payloads for inserting a validator's keys
 | Share | Default | Goes to |
 | --- | --- | --- |
 | `ShareAuthor` | 33% | the owner of `url`, or the owners pot if nobody has claimed it |
-| `ShareReferrer` | 33% | the owner of `url_ref` (the page that sent the user), or the owners pot |
+| `ShareReferrer` | 33% | the owner of `url_ref` (the page that sent the user), or the owners pot if it is unclaimed or the liker owns it |
 | `SharePreviousLikers` | 33% | earlier likers of `url`, front of the queue first |
 | remainder | 1% | the likes pot |
 

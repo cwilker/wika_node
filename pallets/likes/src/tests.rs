@@ -87,6 +87,17 @@ fn the_referrer_page_owner_is_paid() {
 }
 
 #[test]
+fn a_liker_is_not_paid_for_referring_themselves() {
+	new_test_ext().execute_with(|| {
+		MockOwners::set(REF, ALICE);
+		assert_ok!(like(ALICE, 3));
+		assert_eq!(balance(ALICE), 997 * UNIT);
+		// Author and referrer shares both go to the owners pot.
+		assert_eq!(balance(OWNERS_POT), UNIT + 2 * (3 * UNIT * 33 / 100));
+	});
+}
+
+#[test]
 fn one_like_per_account_per_url() {
 	new_test_ext().execute_with(|| {
 		assert_ok!(like(ALICE, 1));

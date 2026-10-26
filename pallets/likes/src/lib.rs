@@ -3,7 +3,8 @@
 //! Anyone can like a URL by paying `LikePrice` per like. Each payment is split:
 //!
 //! - `ShareAuthor`% to the owner of the URL (see the owners pallet), or the owners pot if unclaimed;
-//! - `ShareReferrer`% to the owner of the referring URL (`url_ref`), or the owners pot;
+//! - `ShareReferrer`% to the owner of the referring URL (`url_ref`), or the owners pot if it is
+//!   unclaimed or owned by the liker (nobody earns a referral for their own like);
 //! - `SharePreviousLikers`% to the people who liked the URL earlier, first come first served;
 //! - whatever is left to this pallet's pot.
 //!
@@ -232,7 +233,12 @@ pub mod pallet {
 			let author = T::OwnershipRegistry::owner_of(url);
 			Self::pay(sender, num_likes, &author, ShareAuthor::<T>::get())?;
 
-			let referrer = T::OwnershipRegistry::owner_of(url_ref);
+			// A liker can't refer themselves. The like still goes through, because wallets fill in
+			// `url_ref` from the tab the user came from, which may be the user's own page.
+			let mut referrer = T::OwnershipRegistry::owner_of(url_ref);
+			if &referrer == sender {
+				referrer = T::OwnershipRegistry::pot_id();
+			}
 			Self::pay(sender, num_likes, &referrer, ShareReferrer::<T>::get())?;
 
 			let extra = 100u8.saturating_sub(
