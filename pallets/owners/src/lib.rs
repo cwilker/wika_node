@@ -9,16 +9,29 @@
 //!    during blocks `R+1 ..= R+NumBlocksToCommit`.
 //! 3. It reveals the vote during the following `NumBlocksToReveal` blocks. The salt is the
 //!    verifier's signature over the vote, so it cannot be guessed and is checked on chain.
-//! 4. One block after the reveal window closes, the votes are tallied into `Results`. If the
-//!    majority voted yes, holds more than `PrctNeededForAgreement`% of the votes and has at least
-//!    `MajorityMin` members, the requester becomes the owner in `Owners`.
-//! 5. `NumBlocksToDelete` blocks later the request, commits, reveals and result are deleted.
+//! 4. One block after the snapshotted reveal window closes, votes are tallied against the
+//!    full designated electorate and its snapshotted threshold. Unrelated page intro bytes do
+//!    not split agreement. Revoked identities cannot contribute. Outcomes distinguish approval,
+//!    quorum-established invalid proof, and inconclusive results.
+//! 5. Bounded agendas clean round data at its snapshotted deadline. Ownership stays.
+//!
+//! Safe claims use signed, page/chain/wallet-bound head proofs and a restricted external
+//! verifier. Funded author allocations are held in separate escrow, assigned to ownership
+//! periods and withdrawn with fresh control evidence (or wallet authorization for closed
+//! periods). Safe transitions run at finalization after the timestamp inherent. Legacy marker
+//! requests are disabled by the runtime. ETL/dashboard/native extension integration and
+//! production benchmarks/configuration/review remain incomplete.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 
 pub use pallet::*;
+#[cfg(test)]
+mod claim_tests;
+mod claims;
+pub mod proof;
+mod transfers;
 
 #[cfg(test)]
 mod mock;
@@ -73,7 +86,10 @@ pub mod crypto {
 /// Lowercase hex, as it appears in an ownership mark.
 pub fn to_hex(bytes: &[u8]) -> Vec<u8> {
 	const DIGITS: &[u8; 16] = b"0123456789abcdef";
-	bytes.iter().flat_map(|b| [DIGITS[(b >> 4) as usize], DIGITS[(b & 0xf) as usize]]).collect()
+	bytes
+		.iter()
+		.flat_map(|b| [DIGITS[(b >> 4) as usize], DIGITS[(b & 0xf) as usize]])
+		.collect()
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -86,19 +102,25 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// Whether `mark` is a valid ownership mark for the account whose encoded id is `account`.
 /// Hex is matched case-insensitively.
 pub fn mark_proves(mark: &[u8], account: &[u8]) -> bool {
-	mark.len() <= MARK_LENGTH &&
-		mark.starts_with(MARK_PREFIX) &&
-		find(&mark.to_ascii_lowercase(), &to_hex(account)).is_some()
+	mark.len() <= MARK_LENGTH
+		&& mark.starts_with(MARK_PREFIX)
+		&& find(&mark.to_ascii_lowercase(), &to_hex(account)).is_some()
 }
 
 /// What a verifier saw on a page: its vote, the first bytes of the page, and the mark when it
 /// votes yes (empty otherwise).
 pub fn inspect_page(page: &[u8], account: &[u8]) -> (bool, Vec<u8>, Vec<u8>) {
 	let intro = page[..page.len().min(INTRO_LENGTH)].to_vec();
-	let Some(start) = find(page, MARK_PREFIX) else { return (false, intro, Vec::new()) };
+	let Some(start) = find(page, MARK_PREFIX) else {
+		return (false, intro, Vec::new());
+	};
 	let mark = &page[start..page.len().min(start + MARK_LENGTH)];
 	if mark_proves(mark, account) {
-		(true, intro, mark.to_vec())
+		{
+			let mut normalized = MARK_PREFIX.to_vec();
+			normalized.extend(to_hex(account));
+			(true, intro, normalized)
+		}
 	} else {
 		(false, intro, Vec::new())
 	}
@@ -152,7 +174,7 @@ pub mod pallet {
 		RuntimeAppPublic, SaturatedConversion,
 	};
 
-	/// Pot that receives request fees and, through the likes pallet, payments for unclaimed URLs.
+	/// Fee/treasury pot, also used for legacy unclaimed referrer allocations. Author escrow is separate.
 	pub const PALLET_ID: PalletId = PalletId(*b"AUTHORS!");
 
 	const FETCH_TIMEOUT_MS: u64 = 15_000;
@@ -175,6 +197,123 @@ pub mod pallet {
 	>>::GenericPublic;
 	pub type UrlOf<T> = BoundedVec<u8, <T as Config>::MaxLengthURL>;
 	pub type IntroOf = BoundedVec<u8, ConstU32<{ INTRO_LENGTH as u32 }>>;
+	/// A round retains its electorate and deadlines even if administrators change settings.
+	#[derive(
+		Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
+	)]
+	#[scale_info(skip_type_params(T))]
+	pub struct RoundOf<T: Config> {
+		pub members: BoundedVec<T::AccountId, T::MaxVerifiers>,
+		pub threshold: u32,
+		pub commit_end: BlockNumberFor<T>,
+		pub reveal_end: BlockNumberFor<T>,
+	}
+
+	#[derive(
+		Encode,
+		Decode,
+		DecodeWithMemTracking,
+		Clone,
+		Copy,
+		PartialEq,
+		Eq,
+		Debug,
+		TypeInfo,
+		MaxEncodedLen,
+	)]
+	pub enum VerificationOutcome {
+		Approved,
+		Expired,
+		InvalidProof,
+		Inconclusive,
+	}
+
+	pub type ProofOf = BoundedVec<u8, ConstU32<2048>>;
+	#[derive(
+		Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
+	)]
+	#[scale_info(skip_type_params(T))]
+	pub struct OwnershipPeriod<T: Config> {
+		pub owner: T::AccountId,
+		pub started_at: u64,
+		pub started_block: BlockNumberFor<T>,
+		pub started_event_index: u32,
+		pub ended_at: Option<u64>,
+		pub ended_block: Option<BlockNumberFor<T>>,
+		pub ended_event_index: Option<u32>,
+		pub balance: BalanceOf<T>,
+		pub proof: ProofOf,
+		pub verified_at: Option<u64>,
+	}
+	#[derive(
+		Encode,
+		Decode,
+		DecodeWithMemTracking,
+		Clone,
+		Copy,
+		PartialEq,
+		Eq,
+		Debug,
+		TypeInfo,
+		MaxEncodedLen,
+	)]
+	pub enum CheckPurpose {
+		Initial,
+		Refresh(u64),
+		ReplacementInitial,
+		ReplacementFinal([u8; 32]),
+	}
+	#[derive(
+		Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
+	)]
+	pub struct ClaimCheck {
+		pub purpose: CheckPurpose,
+		pub proof: ProofOf,
+		pub expires_at: u64,
+		pub retries_remaining: u8,
+	}
+
+	#[pallet::composite_enum]
+	pub enum HoldReason {
+		Replacement,
+	}
+	#[derive(
+		Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
+	)]
+	#[scale_info(skip_type_params(T))]
+	pub struct Replacement<T: Config> {
+		pub id: [u8; 32],
+		pub candidate: T::AccountId,
+		pub previous_period: u64,
+		pub proof: ProofOf,
+		pub opened_at: u64,
+		pub earliest_activation: u64,
+		pub deadline: u64,
+		pub bond: BalanceOf<T>,
+		pub owner_approved: bool,
+		pub candidate_approved: bool,
+		pub objection: bool,
+	}
+	#[derive(
+		Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
+	)]
+	#[scale_info(skip_type_params(T))]
+	pub struct RetryCredit<T: Config> {
+		pub account: T::AccountId,
+		pub check: ClaimCheck,
+	}
+
+	#[derive(
+		Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
+	)]
+	#[scale_info(skip_type_params(T))]
+	pub struct ClaimResult<T: Config> {
+		pub account: T::AccountId,
+		pub purpose: CheckPurpose,
+		pub outcome: VerificationOutcome,
+		pub checked_at: u64,
+	}
+
 	pub type MarkOf = BoundedVec<u8, ConstU32<{ MARK_LENGTH as u32 }>>;
 
 	/// Verifier record:
@@ -199,13 +338,43 @@ pub mod pallet {
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
 
+	#[derive(
+		Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
+	)]
+	pub struct PolicyIntent<AccountId> {
+		pub attempt: u64,
+		pub slot: u16,
+		pub account: AccountId,
+		pub proof_digest: [u8; 32],
+		pub selection: wika_traits::PolicySelection,
+		pub expires_at: u64,
+	}
+	#[derive(
+		Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
+	)]
+	pub struct PolicyOutcome<AccountId> {
+		pub attempt: u64,
+		pub account: AccountId,
+		pub applied: bool,
+		pub reason: wika_traits::PolicyOutcomeReason,
+	}
 	#[pallet::config]
 	pub trait Config: CreateSignedTransaction<Call<Self>> + frame_system::Config {
 		/// The verifier key nodes sign commits and reveals with.
 		type AuthorityId: AppCrypto<Self::Public, Self::Signature>;
+		type Clock: frame_support::traits::UnixTime;
+		type PageEconomics: wika_traits::PageEconomics<Self::AccountId>;
+		/// Temporary compatibility switch. Disabled in the runtime; legacy requests cannot claim escrow.
+		#[pallet::constant]
+		type AllowLegacyClaims: Get<bool>;
 
 		/// The currency request fees are paid in.
-		type Currency: Mutate<Self::AccountId>;
+		type Currency: Mutate<Self::AccountId>
+			+ frame_support::traits::fungible::MutateHold<
+				Self::AccountId,
+				Reason = Self::RuntimeHoldReason,
+			>;
+		type RuntimeHoldReason: Parameter + Member + MaxEncodedLen + Copy + From<HoldReason>;
 
 		/// URLs must be strictly shorter than this many bytes.
 		#[pallet::constant]
@@ -214,6 +383,10 @@ pub mod pallet {
 		/// Most URL checks that can be requested in one block.
 		#[pallet::constant]
 		type MaxRequestsPerBlock: Get<u32>;
+
+		/// Bounds registration, electorate snapshots, tallying, and cleanup.
+		#[pallet::constant]
+		type MaxVerifiers: Get<u32>;
 	}
 
 	#[pallet::type_value]
@@ -265,6 +438,97 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type MajorityMin<T> = StorageValue<_, u32, ValueQuery, DefaultMajorityMin>;
 
+	/// Snapshotted request electorate, threshold and timing.
+	#[pallet::storage]
+	pub type Rounds<T: Config> = StorageMap<_, Blake2_128Concat, UrlOf<T>, RoundOf<T>, OptionQuery>;
+
+	/// Bounded agendas avoid scanning active pages or consulting mutable timing settings.
+	#[pallet::storage]
+	pub type TallyAgenda<T: Config> = StorageMap<
+		_,
+		Twox64Concat,
+		BlockNumberFor<T>,
+		BoundedVec<UrlOf<T>, T::MaxRequestsPerBlock>,
+		ValueQuery,
+	>;
+	#[pallet::storage]
+	pub type CleanupAgenda<T: Config> = StorageMap<
+		_,
+		Twox64Concat,
+		BlockNumberFor<T>,
+		BoundedVec<(UrlOf<T>, BlockNumberFor<T>), T::MaxRequestsPerBlock>,
+		ValueQuery,
+	>;
+
+	#[pallet::storage]
+	pub type CurrentPeriod<T: Config> = StorageMap<_, Blake2_128Concat, UrlOf<T>, u64, OptionQuery>;
+	#[pallet::storage]
+	pub type Periods<T: Config> = StorageDoubleMap<
+		_,
+		Blake2_128Concat,
+		UrlOf<T>,
+		Twox64Concat,
+		u64,
+		OwnershipPeriod<T>,
+		OptionQuery,
+	>;
+	#[pallet::storage]
+	pub type UnclaimedRewards<T: Config> =
+		StorageMap<_, Blake2_128Concat, UrlOf<T>, BalanceOf<T>, ValueQuery>;
+	#[pallet::storage]
+	pub type TotalRewardLiability<T: Config> = StorageValue<_, BalanceOf<T>, ValueQuery>;
+	#[pallet::storage]
+	pub type PolicyIntents<T: Config> =
+		StorageMap<_, Blake2_128Concat, UrlOf<T>, PolicyIntent<T::AccountId>, OptionQuery>;
+	#[pallet::storage]
+	pub type PolicyIntentSlots<T: Config> = StorageMap<_, Twox64Concat, u16, UrlOf<T>, OptionQuery>;
+	#[pallet::storage]
+	pub type PolicyIntentCursor<T> = StorageValue<_, u16, ValueQuery>;
+	#[pallet::storage]
+	pub type NextPolicyAttempt<T> = StorageValue<_, u64, ValueQuery>;
+	#[pallet::storage]
+	pub type LastPolicyOutcomes<T: Config> =
+		StorageMap<_, Blake2_128Concat, UrlOf<T>, PolicyOutcome<T::AccountId>, OptionQuery>;
+	#[pallet::storage]
+	pub type ClaimChecks<T: Config> =
+		StorageMap<_, Blake2_128Concat, UrlOf<T>, ClaimCheck, OptionQuery>;
+	#[pallet::storage]
+	pub type UsedClaimNonces<T: Config> = StorageDoubleMap<
+		_,
+		Blake2_128Concat,
+		T::AccountId,
+		Blake2_128Concat,
+		[u8; 32],
+		(),
+		OptionQuery,
+	>;
+
+	#[pallet::storage]
+	pub type PendingReplacements<T: Config> =
+		StorageMap<_, Blake2_128Concat, UrlOf<T>, Replacement<T>, OptionQuery>;
+	#[pallet::storage]
+	pub type CheckBonds<T: Config> =
+		StorageMap<_, Blake2_128Concat, UrlOf<T>, BalanceOf<T>, ValueQuery>;
+	#[pallet::storage]
+	pub type RetryCredits<T: Config> =
+		StorageMap<_, Blake2_128Concat, UrlOf<T>, RetryCredit<T>, OptionQuery>;
+	#[pallet::storage]
+	pub type ActiveChecksByWallet<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::AccountId, u32, ValueQuery>;
+	#[pallet::storage]
+	pub type ActiveChecksTotal<T> = StorageValue<_, u32, ValueQuery>;
+	#[pallet::type_value]
+	pub fn DefaultReplacementBond() -> u128 {
+		1_000_000_000_000
+	}
+	/// Development placeholder; economic configuration must be reviewed before a public release.
+	#[pallet::storage]
+	pub type ReplacementBond<T> = StorageValue<_, u128, ValueQuery, DefaultReplacementBond>;
+
+	#[pallet::storage]
+	pub type LastClaimResults<T: Config> =
+		StorageMap<_, Blake2_128Concat, UrlOf<T>, ClaimResult<T>, OptionQuery>;
+
 	/// Registered verifiers.
 	#[pallet::storage]
 	pub type Verifiers<T: Config> =
@@ -311,11 +575,13 @@ pub mod pallet {
 
 	/// Outcome of each check.
 	#[pallet::storage]
-	pub type Results<T: Config> = StorageMap<_, Blake2_128Concat, UrlOf<T>, ResultOf<T>, OptionQuery>;
+	pub type Results<T: Config> =
+		StorageMap<_, Blake2_128Concat, UrlOf<T>, ResultOf<T>, OptionQuery>;
 
 	/// Registered owner of each URL.
 	#[pallet::storage]
-	pub type Owners<T: Config> = StorageMap<_, Blake2_128Concat, UrlOf<T>, T::AccountId, OptionQuery>;
+	pub type Owners<T: Config> =
+		StorageMap<_, Blake2_128Concat, UrlOf<T>, T::AccountId, OptionQuery>;
 
 	#[pallet::genesis_config]
 	#[derive(frame_support::DefaultNoBound)]
@@ -327,6 +593,10 @@ pub mod pallet {
 	#[pallet::genesis_build]
 	impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
 		fn build(&self) {
+			assert!(
+				self.verifiers.len() <= T::MaxVerifiers::get() as usize,
+				"too many genesis verifiers"
+			);
 			for account in &self.verifiers {
 				Verifiers::<T>::insert(account, Pallet::<T>::new_verifier(Zero::zero()));
 			}
@@ -336,17 +606,151 @@ pub mod pallet {
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
-		VerifierAdded { account: T::AccountId },
-		VerifierEnabled { account: T::AccountId },
-		VerifierDisabled { account: T::AccountId },
-		UrlCheckRequested { account: T::AccountId, url: UrlOf<T> },
-		UrlCheckCommitted { account: T::AccountId, url: UrlOf<T> },
-		UrlCheckRevealed { account: T::AccountId, url: UrlOf<T> },
-		UrlOwnerRegistered { account: T::AccountId, url: UrlOf<T>, block: u32 },
+		ClaimPolicyRequested {
+			url: UrlOf<T>,
+			attempt: u64,
+			account: T::AccountId,
+			proof_digest: [u8; 32],
+			selection: wika_traits::PolicySelection,
+		},
+		ClaimPolicyOutcome {
+			url: UrlOf<T>,
+			attempt: u64,
+			account: T::AccountId,
+			applied: bool,
+			reason: wika_traits::PolicyOutcomeReason,
+		},
+		ReplacementOpened {
+			url: UrlOf<T>,
+			id: [u8; 32],
+			previous_period: u64,
+			candidate: T::AccountId,
+			earliest_activation: u64,
+			deadline: u64,
+			bond: BalanceOf<T>,
+		},
+		ReplacementClosed {
+			url: UrlOf<T>,
+			id: [u8; 32],
+			activated: bool,
+		},
+		ReplacementApproved {
+			url: UrlOf<T>,
+			id: [u8; 32],
+			account: T::AccountId,
+		},
+		ReplacementObjected {
+			url: UrlOf<T>,
+			id: [u8; 32],
+			account: T::AccountId,
+		},
+		BondSettled {
+			url: UrlOf<T>,
+			account: T::AccountId,
+			amount: BalanceOf<T>,
+			forfeited: bool,
+		},
+		OwnershipPeriodClosed {
+			url: UrlOf<T>,
+			period: u64,
+			ended_at: u64,
+		},
+		AuthorRewardAccrued {
+			url: UrlOf<T>,
+			period: Option<u64>,
+			amount: BalanceOf<T>,
+		},
+		OwnershipPeriodActivated {
+			url: UrlOf<T>,
+			period: u64,
+			account: T::AccountId,
+			started_at: u64,
+			backlog: BalanceOf<T>,
+			proof_digest: [u8; 32],
+		},
+		ClaimVerificationRequested {
+			url: UrlOf<T>,
+			purpose: CheckPurpose,
+			account: T::AccountId,
+			expires_at: u64,
+			proof_digest: [u8; 32],
+		},
+		ClaimTransitionFailed {
+			url: UrlOf<T>,
+			error: sp_runtime::DispatchError,
+		},
+		ClaimVerificationFinished {
+			url: UrlOf<T>,
+			purpose: CheckPurpose,
+			outcome: VerificationOutcome,
+			checked_at: u64,
+		},
+		AuthorRewardsWithdrawn {
+			url: UrlOf<T>,
+			period: u64,
+			account: T::AccountId,
+			amount: BalanceOf<T>,
+		},
+		VerifierAdded {
+			account: T::AccountId,
+		},
+		VerifierEnabled {
+			account: T::AccountId,
+		},
+		VerifierDisabled {
+			account: T::AccountId,
+		},
+		VerificationFinished {
+			url: UrlOf<T>,
+			outcome: VerificationOutcome,
+			electorate: u32,
+			threshold: u32,
+			matching: u32,
+		},
+		UrlCheckRequested {
+			account: T::AccountId,
+			url: UrlOf<T>,
+		},
+		UrlCheckCommitted {
+			account: T::AccountId,
+			url: UrlOf<T>,
+		},
+		UrlCheckRevealed {
+			account: T::AccountId,
+			url: UrlOf<T>,
+		},
+		UrlOwnerRegistered {
+			account: T::AccountId,
+			url: UrlOf<T>,
+			block: u32,
+		},
 	}
 
 	#[pallet::error]
 	pub enum Error<T> {
+		PolicyIntentCapacity,
+		PolicyAttemptOverflow,
+		PolicyIntentMismatch,
+		ReplacementPending,
+		ReplacementNotFound,
+		ReplacementIdMismatch,
+		TransferWindowOpen,
+		TransferExpired,
+		NotTransferParty,
+		RetryUnavailable,
+		ActiveCheckLimit,
+		SignedProofRequired,
+		InvalidPageIdentity,
+		InvalidClaimEnvelope,
+		ExpiredClaim,
+		ClaimNonceUsed,
+		ReplacementRequired,
+		PeriodNotFound,
+		NotPeriodOwner,
+		VerificationRequired,
+		InsufficientRewards,
+		EscrowUnderfunded,
+		ArithmeticOverflow,
 		UrlTooLong,
 		NotEnoughBalanceToRequestUrlCheck,
 		UrlCheckAlreadyInQueue,
@@ -364,17 +768,46 @@ pub mod pallet {
 		CantRevealWithoutCommit,
 		/// `MaxRequestsPerBlock` checks were already requested in this block.
 		TooManyRequests,
+		TooManyVerifiers,
+		NoVerifierQuorum,
+		AlreadyCommitted,
+		AlreadyRevealed,
 	}
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
 		fn on_initialize(now: BlockNumberFor<T>) -> Weight {
+			let slot = PolicyIntentCursor::<T>::get();
+			Self::prune_policy_slot(slot);
+			PolicyIntentCursor::<T>::put((slot + 1) % 256);
 			let tallied = Self::aggregate_votes(now);
 			let cleaned = Self::clean_up(now);
 			let db = T::DbWeight::get();
-			db.reads(4)
-				.saturating_add(db.reads_writes(8, 4).saturating_mul(tallied.into()))
-				.saturating_add(db.reads_writes(1, 5).saturating_mul(cleaned.into()))
+			db.reads_writes(8, 7)
+				.saturating_add(
+					db.reads_writes(
+						8 + 3 * u64::from(T::MaxVerifiers::get()),
+						4 + u64::from(T::MaxVerifiers::get()),
+					)
+					.saturating_mul(tallied.into()),
+				)
+				.saturating_add(
+					db.reads_writes(
+						2 + 2 * u64::from(T::MaxVerifiers::get()),
+						4 + 2 * u64::from(T::MaxVerifiers::get()),
+					)
+					.saturating_mul(cleaned.into()),
+				)
+		}
+
+		fn on_finalize(now: BlockNumberFor<T>) {
+			// Timestamp's inherent has now run. Safe activation/freshness use this block's time,
+			// rather than the previous block's timestamp available during on_initialize.
+			for url in TallyAgenda::<T>::take(now) {
+				if ClaimChecks::<T>::contains_key(&url) {
+					Self::aggregate_votes_for_request(now, &url);
+				}
+			}
 		}
 
 		fn offchain_worker(now: BlockNumberFor<T>) {
@@ -395,10 +828,17 @@ pub mod pallet {
 	impl<T: Config> Pallet<T> {
 		/// Register a verifier.
 		#[pallet::call_index(1)]
-		#[pallet::weight(T::DbWeight::get().reads_writes(1, 1).saturating_add(Weight::from_parts(10_000_000, 0)))]
+		#[pallet::weight(T::DbWeight::get().reads_writes(1 + u64::from(T::MaxVerifiers::get()), 1).saturating_add(Weight::from_parts(10_000_000, 0)))]
 		pub fn add_verifier(origin: OriginFor<T>, account: T::AccountId) -> DispatchResult {
 			ensure_root(origin)?;
-			ensure!(!Verifiers::<T>::contains_key(&account), Error::<T>::VerifierAlreadyRegistered);
+			ensure!(
+				!Verifiers::<T>::contains_key(&account),
+				Error::<T>::VerifierAlreadyRegistered
+			);
+			ensure!(
+				Verifiers::<T>::iter_keys().count() < T::MaxVerifiers::get() as usize,
+				Error::<T>::TooManyVerifiers
+			);
 			let now = frame_system::Pallet::<T>::block_number();
 			Verifiers::<T>::insert(&account, Self::new_verifier(now));
 			Self::deposit_event(Event::VerifierAdded { account });
@@ -427,50 +867,140 @@ pub mod pallet {
 
 		/// Ask the verifiers to check that the caller owns `url`. Costs `RequestPrice`.
 		#[pallet::call_index(4)]
-		#[pallet::weight(T::DbWeight::get().reads_writes(5, 5).saturating_add(Weight::from_parts(40_000_000, 0)))]
+		#[pallet::weight(T::DbWeight::get().reads_writes(8 + u64::from(T::MaxVerifiers::get()), 8).saturating_add(Weight::from_parts(40_000_000, 0)))]
+		#[frame_support::transactional]
 		pub fn request_url_check(origin: OriginFor<T>, url: Vec<u8>) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
-			ensure!(url.len() < T::MaxLengthURL::get() as usize, Error::<T>::UrlTooLong);
-			let url: UrlOf<T> = url.try_into().map_err(|_| Error::<T>::UrlTooLong)?;
+			ensure!(T::AllowLegacyClaims::get(), Error::<T>::SignedProofRequired);
+			Self::queue_check(sender, url, true)
+		}
 
-			let price: BalanceOf<T> = RequestPrice::<T>::get().saturated_into();
-			ensure!(
-				T::Currency::balance(&sender) > price,
-				Error::<T>::NotEnoughBalanceToRequestUrlCheck
-			);
-			ensure!(!Requests::<T>::contains_key(&url), Error::<T>::UrlCheckAlreadyInQueue);
+		#[pallet::call_index(7)]
+		#[pallet::weight(Weight::from_parts(250_000_000, 20_000))]
+		#[frame_support::transactional]
+		pub fn claim_page(origin: OriginFor<T>, proof: Vec<u8>) -> DispatchResult {
+			Self::begin_claim(ensure_signed(origin)?, proof)
+		}
+		#[pallet::call_index(16)]
+		#[pallet::weight(Weight::from_parts(500_000_000,320_000).saturating_add(T::DbWeight::get().reads_writes(540,12)))]
+		#[frame_support::transactional]
+		pub fn claim_page_with_policy(
+			origin: OriginFor<T>,
+			proof: Vec<u8>,
+			selection: wika_traits::PolicySelection,
+		) -> DispatchResult {
+			Self::begin_policy_claim(ensure_signed(origin)?, proof, selection)
+		}
+		#[pallet::call_index(8)]
+		#[pallet::weight(Weight::from_parts(200_000_000, 20_000))]
+		#[frame_support::transactional]
+		pub fn verify_withdrawal(
+			origin: OriginFor<T>,
+			url: Vec<u8>,
+			period: u64,
+		) -> DispatchResult {
+			Self::begin_refresh(ensure_signed(origin)?, url, period)
+		}
+		#[pallet::call_index(9)]
+		#[pallet::weight(Weight::from_parts(150_000_000, 20_000))]
+		#[frame_support::transactional]
+		pub fn withdraw_rewards(
+			origin: OriginFor<T>,
+			url: Vec<u8>,
+			period: u64,
+			amount: BalanceOf<T>,
+		) -> DispatchResult {
+			Self::withdraw_author(ensure_signed(origin)?, url, period, amount)
+		}
 
-			if !price.is_zero() {
-				T::Currency::transfer(&sender, &Self::pot_id(), price, Preservation::Preserve)?;
-			}
-			let now = frame_system::Pallet::<T>::block_number();
-			History::<T>::try_mutate(now, |urls| urls.try_push(url.clone()))
-				.map_err(|_| Error::<T>::TooManyRequests)?;
-			Requests::<T>::insert(&url, (now, sender.clone()));
-
-			Self::deposit_event(Event::UrlCheckRequested { account: sender, url });
-			Ok(())
+		#[pallet::call_index(10)]
+		#[pallet::weight(Weight::from_parts(250_000_000, 20_000))]
+		#[frame_support::transactional]
+		pub fn finalize_replacement(
+			origin: OriginFor<T>,
+			url: Vec<u8>,
+			id: [u8; 32],
+		) -> DispatchResult {
+			Self::begin_final_check(ensure_signed(origin)?, url, id)
+		}
+		#[pallet::call_index(11)]
+		#[pallet::weight(Weight::from_parts(150_000_000, 20_000))]
+		#[frame_support::transactional]
+		pub fn approve_replacement(
+			origin: OriginFor<T>,
+			url: Vec<u8>,
+			id: [u8; 32],
+		) -> DispatchResult {
+			Self::approve_transfer(ensure_signed(origin)?, url, id)
+		}
+		#[pallet::call_index(12)]
+		#[pallet::weight(Weight::from_parts(150_000_000, 20_000))]
+		#[frame_support::transactional]
+		pub fn object_replacement(
+			origin: OriginFor<T>,
+			url: Vec<u8>,
+			id: [u8; 32],
+		) -> DispatchResult {
+			Self::object_transfer(ensure_signed(origin)?, url, id)
+		}
+		#[pallet::call_index(13)]
+		#[pallet::weight(Weight::from_parts(150_000_000, 20_000))]
+		#[frame_support::transactional]
+		pub fn cancel_replacement(
+			origin: OriginFor<T>,
+			url: Vec<u8>,
+			id: [u8; 32],
+		) -> DispatchResult {
+			Self::cancel_transfer(ensure_signed(origin)?, url, id)
+		}
+		#[pallet::call_index(14)]
+		#[pallet::weight(Weight::from_parts(150_000_000, 20_000))]
+		#[frame_support::transactional]
+		pub fn expire_replacement(origin: OriginFor<T>, url: Vec<u8>) -> DispatchResult {
+			ensure_signed(origin)?;
+			Self::expire_transfer(Self::page_url(&url)?)
+		}
+		#[pallet::call_index(15)]
+		#[pallet::weight(Weight::from_parts(250_000_000, 20_000))]
+		#[frame_support::transactional]
+		pub fn retry_verification(origin: OriginFor<T>, url: Vec<u8>) -> DispatchResult {
+			Self::retry_claim_check(ensure_signed(origin)?, url)
 		}
 
 		/// A verifier's commitment to its vote: keccak-256 of `vote,intro[,proof],salt`.
 		#[pallet::call_index(5)]
-		#[pallet::weight(T::DbWeight::get().reads_writes(3, 2).saturating_add(Weight::from_parts(20_000_000, 0)))]
+		#[pallet::weight(T::DbWeight::get().reads_writes(6, 2).saturating_add(Weight::from_parts(20_000_000, 0)))]
 		pub fn commit_verification(
 			origin: OriginFor<T>,
 			url: Vec<u8>,
 			hash: Vec<u8>,
 		) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
-			let hash: [u8; HASH_LENGTH] =
-				hash.try_into().map_err(|_| Error::<T>::ExpectedHashWith32Bytes)?;
-			ensure!(Self::is_verifier_enabled(&sender), Error::<T>::VerifierNotRegistered);
+			let hash: [u8; HASH_LENGTH] = hash
+				.try_into()
+				.map_err(|_| Error::<T>::ExpectedHashWith32Bytes)?;
+			ensure!(
+				Self::is_verifier_enabled(&sender),
+				Error::<T>::VerifierNotRegistered
+			);
 			let url: UrlOf<T> = url.try_into().map_err(|_| Error::<T>::UrlCheckNotFound)?;
-			let (requested_at, _) =
-				Requests::<T>::get(&url).ok_or(Error::<T>::UrlCheckNotFound)?;
+			let (requested_at, _) = Requests::<T>::get(&url).ok_or(Error::<T>::UrlCheckNotFound)?;
 
 			let now = frame_system::Pallet::<T>::block_number();
-			let commit_end = requested_at.saturating_add(NumBlocksToCommit::<T>::get().into());
-			ensure!(now > requested_at && now <= commit_end, Error::<T>::OffTimeToCommit);
+			let round = Rounds::<T>::get(&url).ok_or(Error::<T>::UrlCheckNotFound)?;
+			ensure!(
+				round.members.contains(&sender),
+				Error::<T>::VerifierNotRegistered
+			);
+			ensure!(
+				!Commits::<T>::contains_key(&url, &sender),
+				Error::<T>::AlreadyCommitted
+			);
+			let commit_end = round.commit_end;
+			ensure!(
+				now > requested_at && now <= commit_end,
+				Error::<T>::OffTimeToCommit
+			);
 
 			Commits::<T>::insert(&url, &sender, hash);
 			Verifiers::<T>::mutate(&sender, |v| {
@@ -480,13 +1010,16 @@ pub mod pallet {
 				}
 			});
 
-			Self::deposit_event(Event::UrlCheckCommitted { account: sender, url });
+			Self::deposit_event(Event::UrlCheckCommitted {
+				account: sender,
+				url,
+			});
 			Ok(())
 		}
 
 		/// A verifier's vote, which must match its earlier commit.
 		#[pallet::call_index(6)]
-		#[pallet::weight(T::DbWeight::get().reads_writes(4, 2).saturating_add(Weight::from_parts(80_000_000, 0)))]
+		#[pallet::weight(T::DbWeight::get().reads_writes(8, 2).saturating_add(Weight::from_parts(80_000_000, 0)))]
 		pub fn reveal_verification(
 			origin: OriginFor<T>,
 			url: Vec<u8>,
@@ -496,7 +1029,10 @@ pub mod pallet {
 			salt: Vec<u8>,
 		) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
-			ensure!(Self::is_verifier_enabled(&sender), Error::<T>::VerifierNotRegistered);
+			ensure!(
+				Self::is_verifier_enabled(&sender),
+				Error::<T>::VerifierNotRegistered
+			);
 			let url: UrlOf<T> = url.try_into().map_err(|_| Error::<T>::UrlCheckNotFound)?;
 			let (requested_at, requester) =
 				Requests::<T>::get(&url).ok_or(Error::<T>::UrlCheckNotFound)?;
@@ -504,19 +1040,39 @@ pub mod pallet {
 			let proof = if vote { proof } else { Vec::new() };
 			if vote {
 				ensure!(
-					mark_proves(&proof, &requester.encode()),
+					if let Some(check) = ClaimChecks::<T>::get(&url) {
+						intro.is_empty() && proof == sp_io::hashing::blake2_256(&check.proof)
+					} else {
+						mark_proves(&proof, &requester.encode())
+					},
 					Error::<T>::InvalidProofOfOwnership
 				);
 			}
-			let intro_b: IntroOf =
-				intro.clone().try_into().map_err(|_| Error::<T>::InvalidProofOfOwnership)?;
-			let proof_b: MarkOf =
-				proof.clone().try_into().map_err(|_| Error::<T>::InvalidProofOfOwnership)?;
+			let intro_b: IntroOf = intro
+				.clone()
+				.try_into()
+				.map_err(|_| Error::<T>::InvalidProofOfOwnership)?;
+			let proof_b: MarkOf = proof
+				.clone()
+				.try_into()
+				.map_err(|_| Error::<T>::InvalidProofOfOwnership)?;
 
 			let now = frame_system::Pallet::<T>::block_number();
-			let reveal_start = requested_at.saturating_add(NumBlocksToCommit::<T>::get().into());
-			let reveal_end = reveal_start.saturating_add(NumBlocksToReveal::<T>::get().into());
-			ensure!(now > reveal_start && now <= reveal_end, Error::<T>::OffTimeToReveal);
+			let round = Rounds::<T>::get(&url).ok_or(Error::<T>::UrlCheckNotFound)?;
+			ensure!(
+				round.members.contains(&sender),
+				Error::<T>::VerifierNotRegistered
+			);
+			ensure!(
+				!Reveals::<T>::contains_key(&url, &sender),
+				Error::<T>::AlreadyRevealed
+			);
+			let reveal_start = round.commit_end;
+			let reveal_end = round.reveal_end;
+			ensure!(
+				now > reveal_start && now <= reveal_end,
+				Error::<T>::OffTimeToReveal
+			);
 
 			let commit =
 				Commits::<T>::get(&url, &sender).ok_or(Error::<T>::CantRevealWithoutCommit)?;
@@ -529,7 +1085,7 @@ pub mod pallet {
 			ensure!(
 				sp_io::crypto::sr25519_verify(
 					&signature,
-					&vote_message(vote, &intro, &proof),
+					&Self::round_message(&url, requested_at, &requester, vote, &intro, &proof),
 					&public
 				),
 				Error::<T>::InvalidSalt
@@ -547,27 +1103,155 @@ pub mod pallet {
 				}
 			});
 
-			Self::deposit_event(Event::UrlCheckRevealed { account: sender, url });
+			Self::deposit_event(Event::UrlCheckRevealed {
+				account: sender,
+				url,
+			});
 			Ok(())
 		}
 	}
 
-	impl<T: Config> wika_traits::OwnershipRegistry<T::AccountId> for Pallet<T> {
+	impl<T: Config> wika_traits::OwnershipRegistry<T::AccountId, BalanceOf<T>> for Pallet<T> {
+		fn ownership_period(url: &[u8]) -> Option<u64> {
+			Self::page_url(url).ok().and_then(CurrentPeriod::<T>::get)
+		}
 		fn pot_id() -> T::AccountId {
 			Self::pot_id()
 		}
 
 		fn owner_of(url: &[u8]) -> T::AccountId {
-			UrlOf::<T>::try_from(url.to_vec())
-				.ok()
+			wika_traits::page_identity::canonicalize(url)
+				.and_then(|url| UrlOf::<T>::try_from(url).ok())
 				.and_then(Owners::<T>::get)
 				.unwrap_or_else(Self::pot_id)
+		}
+		fn referral_owner(url: &[u8]) -> Option<(T::AccountId, u64)> {
+			let url: UrlOf<T> = wika_traits::page_identity::canonicalize(url)?
+				.try_into()
+				.ok()?;
+			let id = CurrentPeriod::<T>::get(&url)?;
+			let p = Periods::<T>::get(&url, id)?;
+			let verified = p.verified_at?;
+			let now = Self::now_ms();
+			(p.ended_at.is_none()
+				&& now >= verified
+				&& now - verified < crate::claims::FRESHNESS_MS)
+				.then_some((p.owner, id))
+		}
+		fn pay_author(sender: &T::AccountId, url: &[u8], amount: BalanceOf<T>) -> DispatchResult {
+			Self::accrue_author(sender, url, amount)
 		}
 	}
 
 	impl<T: Config> Pallet<T> {
+		pub(crate) fn queue_check(
+			sender: T::AccountId,
+			url: Vec<u8>,
+			charge_fee: bool,
+		) -> DispatchResult {
+			ensure!(
+				url.len() < T::MaxLengthURL::get() as usize,
+				Error::<T>::UrlTooLong
+			);
+			let url: UrlOf<T> = url.try_into().map_err(|_| Error::<T>::UrlTooLong)?;
+
+			let members: BoundedVec<_, T::MaxVerifiers> = Verifiers::<T>::iter()
+				.filter_map(|(id, v)| v.1.then_some(id))
+				.collect::<Vec<_>>()
+				.try_into()
+				.map_err(|_| Error::<T>::TooManyVerifiers)?;
+			let threshold =
+				((members.len() as u32 * u32::from(PrctNeededForAgreement::<T>::get())) / 100 + 1)
+					.max(MajorityMin::<T>::get());
+			ensure!(
+				!members.is_empty() && threshold <= members.len() as u32,
+				Error::<T>::NoVerifierQuorum
+			);
+			let now = frame_system::Pallet::<T>::block_number();
+			let commit_end = now.saturating_add(NumBlocksToCommit::<T>::get().into());
+			let reveal_end = commit_end.saturating_add(NumBlocksToReveal::<T>::get().into());
+			let tally_at = reveal_end.saturating_add(1u32.into());
+			let cleanup_at = tally_at.saturating_add(NumBlocksToDelete::<T>::get().into());
+			TallyAgenda::<T>::try_mutate(tally_at, |urls| urls.try_push(url.clone()))
+				.map_err(|_| Error::<T>::TooManyRequests)?;
+			CleanupAgenda::<T>::try_mutate(cleanup_at, |urls| urls.try_push((url.clone(), now)))
+				.map_err(|_| Error::<T>::TooManyRequests)?;
+			Rounds::<T>::insert(
+				&url,
+				RoundOf::<T> {
+					members,
+					threshold,
+					commit_end,
+					reveal_end,
+				},
+			);
+			let price: BalanceOf<T> = if charge_fee {
+				RequestPrice::<T>::get().saturated_into()
+			} else {
+				Zero::zero()
+			};
+			ensure!(
+				T::Currency::balance(&sender) > price,
+				Error::<T>::NotEnoughBalanceToRequestUrlCheck
+			);
+			ensure!(
+				!Requests::<T>::contains_key(&url),
+				Error::<T>::UrlCheckAlreadyInQueue
+			);
+
+			if !price.is_zero() {
+				T::Currency::transfer(&sender, &Self::pot_id(), price, Preservation::Preserve)?;
+			}
+			let now = frame_system::Pallet::<T>::block_number();
+			History::<T>::try_mutate(now, |urls| urls.try_push(url.clone()))
+				.map_err(|_| Error::<T>::TooManyRequests)?;
+			Requests::<T>::insert(&url, (now, sender.clone()));
+
+			Self::deposit_event(Event::UrlCheckRequested {
+				account: sender,
+				url,
+			});
+			Ok(())
+		}
+
 		pub fn pot_id() -> T::AccountId {
 			PALLET_ID.into_account_truncating()
+		}
+
+		/// Domain-separated signature binds a report to its chain, page, requester and round.
+		pub fn round_message(
+			url: &[u8],
+			requested_at: BlockNumberFor<T>,
+			requester: &T::AccountId,
+			vote: bool,
+			intro: &[u8],
+			proof: &[u8],
+		) -> Vec<u8> {
+			if let Some(check) = UrlOf::<T>::try_from(url.to_vec())
+				.ok()
+				.and_then(ClaimChecks::<T>::get)
+			{
+				return (
+					b"wika/safe-verification/v1",
+					frame_system::Pallet::<T>::block_hash(BlockNumberFor::<T>::zero()),
+					url,
+					requested_at,
+					requester,
+					check,
+					vote_message(vote, intro, proof),
+				)
+					.encode();
+			}
+
+			(
+				b"wika/verification/v1",
+				frame_system::Pallet::<T>::block_hash(BlockNumberFor::<T>::zero()),
+				url,
+				requested_at,
+				requester,
+				vote_message(vote, intro, proof),
+			)
+				.encode()
 		}
 
 		fn new_verifier(now: BlockNumberFor<T>) -> VerifierOf<T> {
@@ -583,56 +1267,73 @@ pub mod pallet {
 				Some(v) => {
 					v.1 = enabled;
 					Ok(())
-				},
+				}
 				None => Err(Error::<T>::VerifierNotRegistered.into()),
 			})
 		}
 
-		fn block_offset(blocks: u8) -> BlockNumberFor<T> {
-			blocks.into()
-		}
-
 		/// Tallies the requests whose reveal window closed in the previous block.
 		fn aggregate_votes(now: BlockNumberFor<T>) -> u32 {
-			let delta = Self::block_offset(NumBlocksToCommit::<T>::get())
-				.saturating_add(Self::block_offset(NumBlocksToReveal::<T>::get()))
-				.saturating_add(1u32.into());
-			if now <= delta {
-				return 0;
-			}
-			let urls = History::<T>::get(now - delta);
+			let urls = TallyAgenda::<T>::get(now);
 			for url in &urls {
-				Self::aggregate_votes_for_request(now, url);
+				if !ClaimChecks::<T>::contains_key(url) {
+					Self::aggregate_votes_for_request(now, url);
+				}
 			}
 			urls.len() as u32
 		}
 
 		fn aggregate_votes_for_request(now: BlockNumberFor<T>, url: &UrlOf<T>) {
-			let reveals: Vec<(T::AccountId, (bool, IntroOf, MarkOf))> =
-				Reveals::<T>::iter_prefix(url).collect();
-			let total = reveals.len() as u32;
-			if total == 0 {
-				return;
-			}
-
-			let mut counts = BTreeMap::new();
-			for (_, reveal) in &reveals {
-				*counts.entry(reveal).or_insert(0u32) += 1;
-			}
-			let Some((majority, count_majority)) =
-				counts.into_iter().max_by(|a, b| a.1.cmp(&b.1))
-			else {
+			let Some(round) = Rounds::<T>::get(url) else {
 				return;
 			};
-			let prct = count_majority * 100 / total;
+			// A revoked key cannot contribute, including a vote submitted before revocation.
+			// Its place stays in the denominator; revocation can only halt a round.
+			let reveals: Vec<_> = round
+				.members
+				.iter()
+				.filter(|id| Self::is_verifier_enabled(id))
+				.filter_map(|id| Reveals::<T>::get(url, id).map(|r| (id.clone(), r)))
+				.collect();
+			let total = reveals.len() as u32;
 			let count_yes = reveals.iter().filter(|(_, r)| r.0).count() as u32;
-
-			let bar = u32::from(PrctNeededForAgreement::<T>::get());
-			let agreed = prct > bar;
-			let approved = majority.0 && agreed && count_majority >= MajorityMin::<T>::get();
+			let mut counts = BTreeMap::new();
+			// Intro is evidence only: dynamic titles, ads and unrelated bytes cannot split votes.
+			for (_, reveal) in &reveals {
+				*counts.entry((reveal.0, reveal.2.clone())).or_insert(0u32) += 1;
+			}
+			let (key, count_majority) = counts
+				.into_iter()
+				.max_by(|a, b| a.1.cmp(&b.1))
+				.unwrap_or(((false, MarkOf::default()), 0));
+			let majority = (key.0, IntroOf::default(), key.1);
+			let agreed = count_majority >= round.threshold;
+			let approved = majority.0 && agreed;
+			let outcome = if approved {
+				VerificationOutcome::Approved
+			} else if agreed {
+				VerificationOutcome::InvalidProof
+			} else {
+				VerificationOutcome::Inconclusive
+			};
+			Self::deposit_event(Event::VerificationFinished {
+				url: url.clone(),
+				outcome,
+				electorate: round.members.len() as u32,
+				threshold: round.threshold,
+				matching: count_majority,
+			});
 			Results::<T>::insert(
 				url,
-				(now, total, count_yes, count_majority, majority.1.clone(), majority.2.clone(), approved),
+				(
+					now,
+					total,
+					count_yes,
+					count_majority,
+					majority.1.clone(),
+					majority.2.clone(),
+					approved,
+				),
 			);
 
 			// Votes only count toward verifier stats when the round reached agreement.
@@ -644,7 +1345,7 @@ pub mod pallet {
 							if reveal.0 {
 								v.7.saturating_inc();
 							}
-							if reveal == majority {
+							if reveal.0 == majority.0 && reveal.2 == majority.2 {
 								v.8.saturating_inc();
 							}
 						}
@@ -652,6 +1353,10 @@ pub mod pallet {
 				}
 			}
 
+			if ClaimChecks::<T>::contains_key(url) {
+				Self::finish_claim_check(url, outcome);
+				return;
+			}
 			if approved {
 				if let Some((_, owner)) = Requests::<T>::get(url) {
 					if Owners::<T>::get(url).is_none() {
@@ -669,20 +1374,20 @@ pub mod pallet {
 
 		/// Deletes the request data of checks that finished `NumBlocksToDelete` blocks ago.
 		fn clean_up(now: BlockNumberFor<T>) -> u32 {
-			let delta = Self::block_offset(NumBlocksToCommit::<T>::get())
-				.saturating_add(Self::block_offset(NumBlocksToReveal::<T>::get()))
-				.saturating_add(Self::block_offset(NumBlocksToDelete::<T>::get()))
-				.saturating_add(1u32.into());
-			if now <= delta {
-				return 0;
-			}
-			let urls = History::<T>::take(now - delta);
-			for url in &urls {
+			let urls = CleanupAgenda::<T>::take(now);
+			for (url, requested_at) in &urls {
+				// Never let a stale agenda erase a later round for the same page.
+				if Requests::<T>::get(url).is_none_or(|r| r.0 != *requested_at) {
+					continue;
+				}
 				Requests::<T>::remove(url);
-				let _ = Commits::<T>::clear_prefix(url, u32::MAX, None);
-				let _ = Reveals::<T>::clear_prefix(url, u32::MAX, None);
+				Rounds::<T>::remove(url);
+				let _ = Commits::<T>::clear_prefix(url, T::MaxVerifiers::get(), None);
+				let _ = Reveals::<T>::clear_prefix(url, T::MaxVerifiers::get(), None);
 				Results::<T>::remove(url);
 			}
+			// History is used only by the offchain worker in the request block.
+			History::<T>::remove(now.saturating_sub(1u32.into()));
 			urls.len() as u32
 		}
 
@@ -703,7 +1408,9 @@ pub mod pallet {
 			key.sign(&message).map(|signature| signature.encode())
 		}
 
-		fn signer_for(verifier: &T::Public) -> Signer<T, T::AuthorityId, frame_system::offchain::ForAll> {
+		fn signer_for(
+			verifier: &T::Public,
+		) -> Signer<T, T::AuthorityId, frame_system::offchain::ForAll> {
 			Signer::<T, T::AuthorityId>::all_accounts().with_filter(alloc::vec![verifier.clone()])
 		}
 
@@ -713,9 +1420,15 @@ pub mod pallet {
 			requester: &T::AccountId,
 			requested_at: BlockNumberFor<T>,
 		) {
+			// Safe claims are fetched by the restricted external verifier, never by this host API.
+			if ClaimChecks::<T>::contains_key(url) {
+				return;
+			}
 			let now = frame_system::Pallet::<T>::block_number();
-			let commit_end =
-				requested_at.saturating_add(Self::block_offset(NumBlocksToCommit::<T>::get()));
+			let Some(round) = Rounds::<T>::get(url) else {
+				return;
+			};
+			let commit_end = round.commit_end;
 			if now >= commit_end {
 				log::debug!(target: "OWNERS", "too late to commit for {:?}", url);
 				return;
@@ -727,36 +1440,49 @@ pub mod pallet {
 			let (vote, intro, proof) = inspect_page(&page, &requester.encode());
 			log::debug!(target: "OWNERS", "voting {} on {:?}", vote, url);
 
-			let Some(salt) = Self::sign_as(verifier, &vote_message(vote, &intro, &proof)) else {
+			let Some(salt) = Self::sign_as(
+				verifier,
+				&Self::round_message(url, requested_at, requester, vote, &intro, &proof),
+			) else {
 				log::error!(target: "OWNERS", "could not sign with the verifier key");
 				return;
 			};
 			let hash = sp_io::hashing::keccak_256(&commit_preimage(vote, &intro, &proof, &salt));
 
-			let results = Self::signer_for(verifier).send_signed_transaction(|_| {
-				Call::commit_verification { url: url.to_vec(), hash: hash.to_vec() }
-			});
+			let results =
+				Self::signer_for(verifier).send_signed_transaction(|_| Call::commit_verification {
+					url: url.to_vec(),
+					hash: hash.to_vec(),
+				});
 			if results.iter().any(|(_, r)| r.is_ok()) {
-				let item = RevealItem { url: url.to_vec(), vote, intro, proof, salt };
+				let item = RevealItem {
+					url: url.to_vec(),
+					vote,
+					intro,
+					proof,
+					salt,
+				};
 				queue_reveal(commit_end.saturated_into(), item);
 			} else {
 				log::error!(target: "OWNERS", "commit for {:?} was not submitted", url);
 			}
 		}
 
-		fn send_due_reveals(
-			verifier: &T::Public,
-			now: BlockNumberFor<T>,
-		) {
+		fn send_due_reveals(verifier: &T::Public, now: BlockNumberFor<T>) {
 			let block: u32 = now.saturated_into();
 			let items = take_reveals(block);
 			for item in items {
-				let Ok(url) = UrlOf::<T>::try_from(item.url.clone()) else { continue };
-				let Some((requested_at, _)) = Requests::<T>::get(&url) else { continue };
-				let reveal_start =
-					requested_at.saturating_add(Self::block_offset(NumBlocksToCommit::<T>::get()));
-				let reveal_end =
-					reveal_start.saturating_add(Self::block_offset(NumBlocksToReveal::<T>::get()));
+				let Ok(url) = UrlOf::<T>::try_from(item.url.clone()) else {
+					continue;
+				};
+				let Some(_) = Requests::<T>::get(&url) else {
+					continue;
+				};
+				let Some(round) = Rounds::<T>::get(&url) else {
+					continue;
+				};
+				let reveal_start = round.commit_end;
+				let reveal_end = round.reveal_end;
 				// The transaction lands in a later block, so `now == reveal_start` is in time.
 				if now < reveal_start || now >= reveal_end {
 					log::debug!(target: "OWNERS", "outside the reveal window for {:?}", url);
@@ -802,7 +1528,11 @@ pub mod pallet {
 	fn take_reveals(block: u32) -> Vec<RevealItem> {
 		let key = reveal_key(block);
 		let mut store = StorageValueRef::persistent(&key);
-		let items = store.get::<Vec<RevealItem>>().ok().flatten().unwrap_or_default();
+		let items = store
+			.get::<Vec<RevealItem>>()
+			.ok()
+			.flatten()
+			.unwrap_or_default();
 		store.clear();
 		items
 	}
@@ -830,11 +1560,11 @@ pub mod pallet {
 				301 | 302 | 303 | 307 | 308 => {
 					let location = response.headers().find("location")?;
 					current = resolve_location(&current, location)?;
-				},
+				}
 				code => {
 					log::debug!(target: "OWNERS", "{} answered {}", current, code);
 					return None;
-				},
+				}
 			}
 		}
 		None
@@ -847,19 +1577,27 @@ pub mod pallet {
 			return Some(location.to_string());
 		}
 		let scheme_end = base.find("://")? + 3;
-		let origin_end = base[scheme_end..].find('/').map_or(base.len(), |i| scheme_end + i);
+		let origin_end = base[scheme_end..]
+			.find('/')
+			.map_or(base.len(), |i| scheme_end + i);
 		if let Some(rest) = location.strip_prefix("//") {
 			return Some(alloc::format!("{}{}", &base[..scheme_end], rest));
 		}
 		if location.starts_with('/') {
 			return Some(alloc::format!("{}{}", &base[..origin_end], location));
 		}
-		let dir_end = base.rfind('/').filter(|&i| i >= origin_end).map_or(origin_end, |i| i);
+		let dir_end = base
+			.rfind('/')
+			.filter(|&i| i >= origin_end)
+			.map_or(origin_end, |i| i);
 		Some(alloc::format!("{}/{}", &base[..dir_end], location))
 	}
 
 	#[cfg(test)]
-	pub(crate) fn resolve_location_for_test(base: &str, location: &str) -> Option<alloc::string::String> {
+	pub(crate) fn resolve_location_for_test(
+		base: &str,
+		location: &str,
+	) -> Option<alloc::string::String> {
 		resolve_location(base, location)
 	}
 }

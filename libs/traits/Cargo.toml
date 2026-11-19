@@ -13,7 +13,13 @@ publish = false
 workspace = true
 
 [dependencies]
+sp-runtime = { workspace = true }
+codec = { workspace = true, features = ["derive"] }
+scale-info = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true, features = ["std"] }
 
 [features]
 default = ["std"]
-std = []
+std = ["sp-runtime/std", "codec/std", "scale-info/std"]

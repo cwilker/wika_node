@@ -2,7 +2,7 @@
 
 The blockchain behind the [Wika Network](https://www.wika.network): like web pages with WIKA, prove you own a page, and collect the likes it receives.
 
-Version 4 moves the node from Substrate `monthly-2021-08` to the Polkadot SDK (`polkadot-stable2609`). The node is built from the SDK's solochain template, and the three Wika pallets are rewritten with the current FRAME macros. Their calls, storage names and errors stay the same, so wallets keep working. See [What changed in 4.0](#what-changed-in-40).
+Version 4 moves the node from Substrate `monthly-2021-08` to the Polkadot SDK (`polkadot-stable2609`). The node is built from the SDK's solochain template, and the three Wika pallets are rewritten with the current FRAME macros. Runtime 402 adds signed page claims and financial escrow; legacy marker claims are disabled. Consumers must support the current metadata contracts. See [What changed in 4.0](#what-changed-in-40).
 
 ## Quick start
 
@@ -23,7 +23,7 @@ A dev chain has the following set up:
 
 - **Block production:** Alice authors blocks. Sudo is Alice.
 - **Funded accounts:** the well-known dev accounts (`//Alice`, `//Bob`, …, plus their `//stash` accounts) are funded with about 1.15 M WIKA each.
-- **Ownership verification:** `//Alice//ownr` is a registered verifier, and `--dev` puts its key in the node's keystore. A dev node therefore checks URL ownership by itself. The verifier is a separate account from Alice, so its commit and reveal transactions never compete with Alice's for nonces.
+- **Ownership verification:** `//Alice//ownr` is a registered verifier, and `--dev` puts its key in the node's keystore. Runtime 402 uses the separate [signed-proof verifier](verifier/README.md) for safe page claims; start that process alongside the node. The verifier is a separate account from Alice, so its commit and reveal transactions never compete with Alice's for nonces.
 - **Logs:** add `-lLIKE=debug -lOWNERS=debug` to watch the pallets work.
 
 To run with Docker:
@@ -46,6 +46,18 @@ The pallet tests cover:
 
 For an end-to-end test of a wallet against a real node, the browser extension's Playwright suite runs Like, a duplicate Like, Claim and Send when `WIKA_NODE_URL=ws://127.0.0.1:9944` is set.
 
+## Consumer compatibility
+
+Node CI also checks the core/React plugin, ETL, and browser extension against the candidate binary before publishing an image. Each consumer declares its required calls, event fields, storage types, RPC methods, and limits; live tests exercise its actual node integration. Failures identify the affected consumer and requirement.
+
+See [the compatibility gate](compatibility/README.md) for local commands, reports, supported baselines, CI setup, and rollout. For a quick read-only check against a running node:
+
+```sh
+cd compatibility
+npm ci
+WIKA_NODE_URL=ws://127.0.0.1:9944 npm run check:contracts
+```
+
 ## Layout
 
 ```
@@ -53,7 +65,7 @@ node/                 CLI, chain specs (dev, local, test, main), service, RPC
 runtime/              the runtime: Aura + GRANDPA + balances + sudo + the Wika pallets
   src/genesis_config_presets.rs
 pallets/likes         like a URL, split the payment, repay earlier likers
-pallets/owners        verify URL ownership with an offchain worker (commit and reveal)
+pallets/owners        signed claims, ownership periods, escrow and verification rounds
 pallets/authorities   sudo-managed set of block authors and finality voters
 libs/traits           OwnershipRegistry, shared by likes and owners
 validators/           JSON-RPC payloads for inserting a validator's keys
@@ -67,7 +79,7 @@ validators/           JSON-RPC payloads for inserting a validator's keys
 
 | Share | Default | Goes to |
 | --- | --- | --- |
-| `ShareAuthor` | 33% | the owner of `url`, or the owners pot if nobody has claimed it |
+| `ShareAuthor` | 33% | funded escrow for the current ownership period, or the unclaimed page balance |
 | `ShareReferrer` | 33% | the owner of `url_ref` (the page that sent the user), or the owners pot if it is unclaimed or the liker owns it |
 | `SharePreviousLikers` | 33% | earlier likers of `url`, front of the queue first |
 | remainder | 1% | the likes pot |
@@ -81,6 +93,10 @@ Storage read by wallets:
 - `likes.likePrice()`.
 
 ### Ownership (`pallets/owners`)
+
+Current runtime-402 claims use a wallet-signed proof in the server-rendered HTML head, observed by the external verifier. See [safe page claims](#safe-page-claims-runtime-402) and the [verifier guide](verifier/README.md). The following describes the older marker protocol retained in the source; it is disabled in the current runtime.
+
+#### Legacy marker protocol (disabled)
 
 1. **Request.** A user publishes the mark `wika.network/author/<their 64-hex public key>` somewhere on the page, then calls `owners.requestUrlCheck(url)`, which costs `RequestPrice` (5 WIKA).
 2. **Commit.** Every node that holds an enabled verifier's `ownr` key fetches the page in its offchain worker. It follows up to 3 redirects and reads up to 2 MB. It then votes and commits `keccak256(vote,intro[,proof],salt)` within `NumBlocksToCommit` (5) blocks. The salt is the verifier's signature over its vote.
@@ -164,3 +180,26 @@ This is a new chain. It does not migrate state from the 2021 testnet, whose runt
 - **Benchmarked weights.** Weights are conservative hand-set estimates, and the benchmarking CLI is not built into the node.
 - **Fee-free verifier transactions.** Verifier commits and reveals pay normal fees, so verifier accounts need funds.
 - **Bootnodes and telemetry** for a public network.
+
+## Safe page claims (runtime 402)
+
+The node now holds funded author allocations in separate escrow, assigns the first backlog once, and tracks ownership periods. Current withdrawals reuse verification for 90 days; closed periods remain payable to their original wallets without current website control. Valid replacement claims open a 14-day frozen window and require a fresh final check; cooperative approval by both wallets can waive the wait. Earlier earnings never move to the replacement wallet.
+
+Signed-proof requests, bonds, two fee-exempt no-quorum retries, explicit outcomes and bounded active work are implemented. Activation happens at block finalization so timestamp-based policy uses the current block. Legacy marker claims are disabled; start from fresh development genesis, not an existing chain upgrade. No migration or deletion of existing chain data is performed by this work.
+
+See [verifier setup and integration validation](verifier/README.md). Financial ETL projections, a basic local owners dashboard, native extension workflows and the full consumer behavior suites are implemented and passed the local combined functional gate. The high/critical dependency gate now passes. Production release still requires review of remaining moderate/low ETL advisories, AMD64 image verification/full containerized financial indexing (local ARM64 image gate passes), hostile-network integration, benchmarks, fee/bond configuration review and independent operator/review arrangements. The workspace release validation report records the evidence and limits.
+
+
+### Signed host referrals (runtime 403)
+
+Verified current page owners authorize up to four sr25519 host keys through `likes.authorizeHost`, and revoke a generation through `likes.revokeHost`. `likes.likeWithReferral` binds a paying account, exact source and target, chain, five-minute chain-time expiry, request ID and runtime economic commitment. `ReferralApi_quote` is a read-only finalized-state runtime API. All money uses integer units. Allocation parameters are unchanged by this feature.
+
+`likes.like` keeps its call shape for direct likes. Nonempty legacy referral arguments are rejected at and after the runtime's configured `ReferralActivation` height (zero in this development build). Set the intended activation height when preparing a staged chain upgrade, release updated consumers first, and communicate the cutoff. No host keys are installed automatically. Storage version 1 initializes the new namespace without changing balances or accrued rewards.
+
+Replay state uses 302 bounded second buckets with at most 64 consumed IDs each. Admission prunes its bucket before reserving a slot. Idle cleanup visits one bucket with a bounded weight budget. Requests cannot be replayed after pruning because chain-time expiry remains mandatory. Transactional execution rolls back transfers, replay reservations and like state on failure. Admission capacity and conservative weights still require calibration and benchmarking on release reference hardware before production activation.
+
+The signed format and shared fixture are in `pallets/likes/src/referrals.rs` and `compatibility/fixtures/host-referral-v1.json`. The native integration suite belongs to the SDK checkout (`test:referrals-live`). Host signatures authenticate authorization; they cannot prove a visitor saw a page or prevent a modified wallet from substituting a different valid request for that payer.
+
+## Page payout policies
+
+Owner-configurable policies and economic terms v2 are implemented in runtime 404. Activation is disabled until root supplies explicit release rules and a future boundary through `likes.scheduleEconomics`. Existing pages resolve lazily to a frozen legacy profile; new policies lock on first successful payment. See the [implementation and release guide](../docs/page-economics-implementation.html).

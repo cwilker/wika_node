@@ -32,25 +32,47 @@ parameter_types! {
 pub const OWNERS_POT: u64 = 999;
 
 thread_local! {
-	static OWNERS: RefCell<BTreeMap<Vec<u8>, u64>> = RefCell::new(BTreeMap::new());
+	static OWNERS: RefCell<BTreeMap<Vec<u8>, (u64,u64)>> = RefCell::new(BTreeMap::new());
 }
 
 pub struct MockOwners;
 impl MockOwners {
 	pub fn set(url: &[u8], owner: u64) {
-		OWNERS.with(|o| o.borrow_mut().insert(url.to_vec(), owner));
+		OWNERS.with(|o| o.borrow_mut().insert(url.to_vec(), (owner, 1)));
+	}
+	pub fn set_period(url: &[u8], owner: u64, period: u64) {
+		OWNERS.with(|o| o.borrow_mut().insert(url.to_vec(), (owner, period)));
 	}
 }
-impl wika_traits::OwnershipRegistry<u64> for MockOwners {
+impl wika_traits::OwnershipRegistry<u64, u64> for MockOwners {
 	fn pot_id() -> u64 {
 		OWNERS_POT
 	}
 	fn owner_of(url: &[u8]) -> u64 {
-		OWNERS.with(|o| o.borrow().get(url).copied().unwrap_or(OWNERS_POT))
+		OWNERS.with(|o| {
+			o.borrow()
+				.get(url)
+				.map(|(owner, _)| *owner)
+				.unwrap_or(OWNERS_POT)
+		})
+	}
+	fn referral_owner(url: &[u8]) -> Option<(u64, u64)> {
+		OWNERS.with(|o| o.borrow().get(url).copied())
+	}
+	fn pay_author(sender: &u64, url: &[u8], amount: u64) -> Result<(), sp_runtime::DispatchError> {
+		use frame_support::traits::{fungible::Mutate, tokens::Preservation};
+		let owner = Self::owner_of(url);
+		if amount > 0 && *sender != owner {
+			Balances::transfer(sender, &owner, amount, Preservation::Preserve)?;
+		}
+		Ok(())
 	}
 }
 
 impl pallet_likes::Config for Test {
+	type Clock = MockClock;
+	type ReferralActivation = frame_support::traits::ConstU64<100>;
+	type AllowLocalReferralHosts = frame_support::traits::ConstBool<true>;
 	type Currency = Balances;
 	type MaxLengthURL = MaxLengthURL;
 	type OwnershipRegistry = MockOwners;
@@ -66,7 +88,9 @@ pub const POOR: u64 = 20;
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
 	OWNERS.with(|o| o.borrow_mut().clear());
-	let mut t = frame_system::GenesisConfig::<Test>::default().build_storage().unwrap();
+	let mut t = frame_system::GenesisConfig::<Test>::default()
+		.build_storage()
+		.unwrap();
 	pallet_balances::GenesisConfig::<Test> {
 		balances: vec![
 			(ALICE, 1_000 * UNIT),
@@ -84,4 +108,11 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 	let mut ext = sp_io::TestExternalities::new(t);
 	ext.execute_with(|| System::set_block_number(1));
 	ext
+}
+
+pub struct MockClock;
+impl frame_support::traits::UnixTime for MockClock {
+	fn now() -> core::time::Duration {
+		core::time::Duration::from_millis(System::block_number() * 6000)
+	}
 }

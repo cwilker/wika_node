@@ -24,6 +24,7 @@ frame_support::construct_runtime!(
 		System: frame_system,
 		Balances: pallet_balances,
 		Owners: pallet_owners,
+		Likes: pallet_likes,
 	}
 );
 
@@ -38,6 +39,7 @@ impl frame_system::Config for Test {
 #[derive_impl(pallet_balances::config_preludes::TestDefaultConfig)]
 impl pallet_balances::Config for Test {
 	type AccountStore = System;
+	type ExistentialDeposit = ExistentialDeposit;
 }
 
 impl frame_system::offchain::SigningTypes for Test {
@@ -81,12 +83,34 @@ where
 
 parameter_types! {
 	pub const MaxLengthURL: u32 = 255;
+	pub static Now: u64 = 1_000;
+	pub const ExistentialDeposit: u64 = 10;
+	pub static LegacyClaims: bool = true;
 }
 
+pub struct TestClock;
+impl frame_support::traits::UnixTime for TestClock {
+	fn now() -> core::time::Duration {
+		core::time::Duration::from_millis(Now::get())
+	}
+}
+impl pallet_likes::Config for Test {
+	type Clock = TestClock;
+	type ReferralActivation = frame_support::traits::ConstU64<1000000>;
+	type AllowLocalReferralHosts = frame_support::traits::ConstBool<true>;
+	type Currency = Balances;
+	type MaxLengthURL = MaxLengthURL;
+	type OwnershipRegistry = Owners;
+}
 impl pallet_owners::Config for Test {
+	type PageEconomics = Likes;
+	type RuntimeHoldReason = RuntimeHoldReason;
+	type Clock = TestClock;
+	type AllowLegacyClaims = LegacyClaims;
 	type AuthorityId = pallet_owners::crypto::OwnersAppCrypto;
 	type Currency = Balances;
 	type MaxLengthURL = MaxLengthURL;
+	type MaxVerifiers = ConstU32<16>;
 	type MaxRequestsPerBlock = ConstU32<4>;
 }
 
@@ -108,26 +132,37 @@ pub struct Env {
 
 /// Alice is an enabled verifier whose `ownr` key is in the keystore; Bob and Poor are users.
 pub fn new_test_ext() -> Env {
-	let mut t = frame_system::GenesisConfig::<Test>::default().build_storage().unwrap();
+	Now::set(1_000);
+	LegacyClaims::set(true);
+	let mut t = frame_system::GenesisConfig::<Test>::default()
+		.build_storage()
+		.unwrap();
 	pallet_balances::GenesisConfig::<Test> {
 		balances: vec![
 			(account("Alice"), 1_000 * UNIT),
 			(account("Bob"), 1_000 * UNIT),
+			(account("Charlie"), 1_000 * UNIT),
+			(account("Dave"), 1_000 * UNIT),
 			(account("Poor"), UNIT),
 			(Owners::pot_id(), UNIT),
+			(Owners::escrow_id(), UNIT),
 		],
 		..Default::default()
 	}
 	.assimilate_storage(&mut t)
 	.unwrap();
-	pallet_owners::GenesisConfig::<Test> { verifiers: vec![account("Alice")] }
-		.assimilate_storage(&mut t)
-		.unwrap();
+	pallet_owners::GenesisConfig::<Test> {
+		verifiers: vec![account("Alice")],
+	}
+	.assimilate_storage(&mut t)
+	.unwrap();
 
 	let (offchain, offchain_state) = testing::TestOffchainExt::new();
 	let (pool, pool_state) = testing::TestTransactionPoolExt::new();
 	let keystore = MemoryKeystore::new();
-	keystore.sr25519_generate_new(pallet_owners::KEY_TYPE, Some("//Alice")).unwrap();
+	keystore
+		.sr25519_generate_new(pallet_owners::KEY_TYPE, Some("//Alice"))
+		.unwrap();
 
 	let mut ext = sp_io::TestExternalities::new(t);
 	ext.register_extension(OffchainWorkerExt::new(offchain.clone()));
@@ -135,5 +170,9 @@ pub fn new_test_ext() -> Env {
 	ext.register_extension(TransactionPoolExt::new(pool));
 	ext.register_extension(KeystoreExt::new(keystore));
 	ext.execute_with(|| System::set_block_number(1));
-	Env { ext, offchain: offchain_state, pool: pool_state }
+	Env {
+		ext,
+		offchain: offchain_state,
+		pool: pool_state,
+	}
 }

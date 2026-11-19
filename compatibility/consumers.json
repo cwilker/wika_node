@@ -1,0 +1,7 @@
+{
+  "consumers": [
+    { "id": "plugin", "repository": "randombishop/wika_plugins_react", "ref": "master", "directory": "wika_plugins_react", "packageDirectory": "." },
+    { "id": "etl", "repository": "randombishop/wika_etl", "ref": "master", "directory": "wika_etl", "packageDirectory": "subql_wika" },
+    { "id": "browser", "repository": "cwilker/wika_browser_ext_react", "ref": "v2-rebuild", "directory": "wika_browser_ext_react", "packageDirectory": "v2" }
+  ]
+}

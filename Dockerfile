@@ -8,7 +8,8 @@ RUN apt-get update \
 RUN rustup target add wasm32v1-none && rustup component add rust-src
 WORKDIR /wika_node
 COPY . .
-RUN cargo build --locked --release -p wika-node
+ARG CARGO_BUILD_JOBS=2
+RUN cargo build --locked --release -p wika-node -j "$CARGO_BUILD_JOBS"
 
 FROM docker.io/library/debian:bookworm-slim
 RUN apt-get update \

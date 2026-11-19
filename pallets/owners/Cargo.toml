@@ -24,6 +24,8 @@ sp-runtime = { workspace = true }
 wika-traits = { workspace = true }
 
 [dev-dependencies]
+pallet-likes = { workspace = true, default-features = true }
+serde_json = { workspace = true, features = ["std"] }
 pallet-balances = { workspace = true, default-features = true }
 sp-keystore = { workspace = true, default-features = true }
 parking_lot = "0.12"

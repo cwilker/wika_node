@@ -24,6 +24,7 @@
 // For more information, please refer to <http://unlicense.org>
 
 // Substrate and Polkadot dependencies
+use codec::Encode;
 use frame_support::{
 	derive_impl,
 	dispatch::DispatchClass,
@@ -34,7 +35,6 @@ use frame_support::{
 		IdentityFee, Weight,
 	},
 };
-use codec::Encode;
 use frame_system::limits::{BlockLength, BlockWeights};
 use pallet_transaction_payment::{ConstFeeMultiplier, FungibleAdapter, Multiplier};
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
@@ -185,15 +185,23 @@ parameter_types! {
 impl pallet_authorities::Config for Runtime {}
 
 impl pallet_likes::Config for Runtime {
+	type Clock = crate::Timestamp;
+	type ReferralActivation = frame_support::traits::ConstU32<0>;
+	type AllowLocalReferralHosts = frame_support::traits::ConstBool<false>;
 	type Currency = Balances;
 	type MaxLengthURL = MaxLengthURL;
 	type OwnershipRegistry = pallet_owners::Pallet<Runtime>;
 }
 
 impl pallet_owners::Config for Runtime {
+	type PageEconomics = crate::Likes;
+	type RuntimeHoldReason = RuntimeHoldReason;
+	type Clock = crate::Timestamp;
+	type AllowLegacyClaims = frame_support::traits::ConstBool<false>;
 	type AuthorityId = pallet_owners::crypto::OwnersAppCrypto;
 	type Currency = Balances;
 	type MaxLengthURL = MaxLengthURL;
+	type MaxVerifiers = ConstU32<16>;
 	type MaxRequestsPerBlock = ConstU32<64>;
 }
 
@@ -235,10 +243,14 @@ where
 		account: AccountId,
 		nonce: Nonce,
 	) -> Option<UncheckedExtrinsic> {
-		let period =
-			BlockHashCount::get().checked_next_power_of_two().map(|c| c / 2).unwrap_or(2) as u64;
+		let period = BlockHashCount::get()
+			.checked_next_power_of_two()
+			.map(|c| c / 2)
+			.unwrap_or(2) as u64;
 		// `System::block_number` is the block being built, one past the latest.
-		let current_block = System::block_number().saturated_into::<u64>().saturating_sub(1);
+		let current_block = System::block_number()
+			.saturated_into::<u64>()
+			.saturating_sub(1);
 		let tx_ext: TxExtension = (
 			frame_system::AuthorizeCall::<Runtime>::new(),
 			frame_system::CheckNonZeroSender::<Runtime>::new(),
@@ -257,6 +269,8 @@ where
 			.ok()?;
 		let signature = raw_payload.using_encoded(|payload| A::sign(payload, public))?;
 		let (call, tx_ext, _) = raw_payload.deconstruct();
-		Some(generic::UncheckedExtrinsic::new_signed(call, account.into(), signature, tx_ext).into())
+		Some(
+			generic::UncheckedExtrinsic::new_signed(call, account.into(), signature, tx_ext).into(),
+		)
 	}
 }

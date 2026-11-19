@@ -1,0 +1,151 @@
+name: Consumer node compatibility
+
+on:
+  workflow_call:
+    inputs:
+      consumer:
+        required: true
+        type: string
+      consumer_repository:
+        required: true
+        type: string
+      consumer_ref:
+        required: true
+        type: string
+      consumer_package_directory:
+        required: true
+        type: string
+      node_repository:
+        type: string
+        default: randombishop/wika_node
+      node_ref:
+        required: true
+        type: string
+      baseline_ref:
+        type: string
+        default: ''
+      binary_artifact:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ${{ inputs.consumer }} against node
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Check out candidate node
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.node_repository }}
+          ref: ${{ inputs.node_ref }}
+          path: node
+      - name: Check out supported contracts from the base commit
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.node_repository }}
+          ref: ${{ inputs.baseline_ref || inputs.node_ref }}
+          path: baseline-node
+      - name: Check out consumer
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.consumer_repository }}
+          ref: ${{ inputs.consumer_ref }}
+          path: consumer
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            node/compatibility/package-lock.json
+            consumer/${{ inputs.consumer_package_directory }}/package-lock.json
+      - name: Install node build dependencies
+        if: inputs.binary_artifact == ''
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        if: inputs.binary_artifact == ''
+        with:
+          targets: wasm32v1-none
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+        if: inputs.binary_artifact == ''
+        with:
+          workspaces: node
+      - name: Build baseline node for a consumer change
+        if: inputs.binary_artifact == ''
+        working-directory: node
+        run: cargo build --locked --release -p wika-node
+      - name: Download exact candidate built by node CI
+        if: inputs.binary_artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.binary_artifact }}
+          path: node/target/release
+      - run: chmod +x node/target/release/wika-node
+      - name: Install compatibility checker
+        working-directory: node/compatibility
+        run: npm ci
+      - name: Install verifier used by live ownership scenarios
+        run: npm ci --prefix node/verifier --ignore-scripts
+      - name: Test compatibility checker
+        working-directory: node/compatibility
+        run: npm test
+      - name: Install consumer
+        working-directory: consumer/${{ inputs.consumer_package_directory }}
+        run: npm ci
+      - name: Install Chromium for native extension workflows
+        if: inputs.consumer == 'browser'
+        working-directory: consumer/${{ inputs.consumer_package_directory }}
+        run: npx playwright install --with-deps chromium
+      - name: Check contract and real consumer behavior
+        working-directory: node/compatibility
+        env:
+          WIKA_PREVIOUS_CONTRACTS: ${{ github.workspace }}/baseline-node/compatibility/supported
+          WIKA_TEST_DB_HOST: 127.0.0.1
+          WIKA_TEST_DB_PORT: 5432
+          WIKA_TEST_DB_USER: postgres
+          WIKA_TEST_DB_PASS: postgres
+          WIKA_TEST_DB_NAME: postgres
+        run: >-
+          npm run check:consumer --
+          --consumer '${{ inputs.consumer }}'
+          --consumer-root '${{ github.workspace }}/consumer'
+          --node-binary ../target/release/wika-node
+      - name: Dependency release gate
+        if: always()
+        working-directory: node/compatibility
+        run: >-
+          npm run check:dependencies --
+          --consumer '${{ inputs.consumer }}'
+          --consumer-root '${{ github.workspace }}/consumer'
+          --report reports/dependency-audit.json
+      - name: Record tested revisions
+        if: always()
+        run: |
+          mkdir -p node/compatibility/reports
+          { echo 'Node:'; git -C node rev-parse HEAD; echo 'Consumer:'; git -C consumer rev-parse HEAD; echo 'Supported baseline:'; git -C baseline-node rev-parse HEAD; } > node/compatibility/reports/revisions.txt
+      - name: Compatibility report
+        if: always()
+        run: node node/compatibility/src/github-summary.mjs node/compatibility/reports
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compatibility-${{ inputs.consumer }}
+          path: node/compatibility/reports

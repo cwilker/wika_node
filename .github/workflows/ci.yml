@@ -2,7 +2,6 @@ name: CI
 
 on:
   push:
-    branches: [master, main]
   pull_request:
 
 concurrency:
@@ -11,9 +10,14 @@ concurrency:
 
 jobs:
   test:
+    outputs:
+      consumers: ${{ steps.consumers.outputs.matrix }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Consumer matrix
+        id: consumers
+        run: echo "matrix=$(jq -c '{include:.consumers}' compatibility/consumers.json)" >> "$GITHUB_OUTPUT"
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y clang libclang-dev protobuf-compiler
       - uses: dtolnay/rust-toolchain@stable
@@ -21,7 +25,7 @@ jobs:
           targets: wasm32v1-none
           components: rust-src
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked -p pallet-likes -p pallet-owners -p pallet-authorities
+      - run: cargo test --locked -p wika-traits -p pallet-likes -p pallet-owners -p pallet-authorities
       - run: cargo build --locked --release -p wika-node
       - name: Smoke test a dev chain
         run: |
@@ -35,9 +39,83 @@ jobs:
           tail -50 node.log
           exit 1
 
-  image:
-    if: github.event_name == 'push'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wika-node-${{ github.sha }}
+          path: target/release/wika-node
+          retention-days: 3
+
+  claim-verifier:
+    name: Safe claims / verifier foundations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+          cache-dependency-path: verifier/package-lock.json
+      - run: npm ci --prefix verifier --ignore-scripts
+      - run: npm test --prefix verifier
+      - name: Install isolated network test tools
+        run: sudo apt-get update && sudo apt-get install -y iproute2 openssl
+      - name: DNS and TLS transport integration in an isolated network namespace
+        run: sudo "$(command -v node)" verifier/integration/transport.mjs --network-namespace --report-directory compatibility/reports/verifier-transport
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verifier-transport-${{ github.sha }}
+          path: compatibility/reports/verifier-transport
+          retention-days: 30
+      - run: npm audit --prefix verifier --audit-level=high
+
+  compatibility:
+    name: Compatibility / ${{ matrix.id }}
     needs: test
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.test.outputs.consumers) }}
+    uses: ./.github/workflows/consumer-compatibility.yml
+    with:
+      consumer: ${{ matrix.id }}
+      consumer_repository: ${{ matrix.repository }}
+      consumer_ref: ${{ matrix.ref }}
+      consumer_package_directory: ${{ matrix.packageDirectory }}
+      node_repository: ${{ github.repository }}
+      node_ref: ${{ github.sha }}
+      baseline_ref: ${{ github.event.pull_request.base.sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || github.sha }}
+      binary_artifact: wika-node-${{ github.sha }}
+
+  claim-verifier-adversarial:
+    name: Safe claims / four verifier processes
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+          cache-dependency-path: verifier/package-lock.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: wika-node-${{ github.sha }}
+          path: target/release
+      - run: chmod +x target/release/wika-node
+      - run: npm ci --prefix verifier --ignore-scripts
+      - name: Finalized adversarial rounds on an owned temporary chain
+        run: npm run --prefix verifier test:adversarial -- --report-directory ../compatibility/reports/verifier-adversarial
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verifier-adversarial-${{ github.sha }}
+          path: compatibility/reports/verifier-adversarial
+          retention-days: 30
+
+  image:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
+    needs: [test, claim-verifier, claim-verifier-adversarial, compatibility]
     runs-on: ubuntu-latest
     permissions:
       contents: read

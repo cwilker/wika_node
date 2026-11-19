@@ -12,3 +12,10 @@
 
 # exlude tmp dir
 /tmp
+
+# Node consumer compatibility harness
+**/node_modules/
+compatibility/reports/
+
+# Local verifier commit/reveal state
+verifier/.state/

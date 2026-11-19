@@ -19,10 +19,12 @@ type NodeKeys = ([u8; 32], [u8; 32]);
 
 fn wika_genesis(
 	nodes: Vec<NodeKeys>,
-	endowed: Vec<(AccountId, u128)>,
+	mut endowed: Vec<(AccountId, u128)>,
 	root: AccountId,
 	verifiers: Vec<AccountId>,
 ) -> Value {
+	// Operating reserve is separate from author liabilities on a fresh chain.
+	endowed.push((pallet_owners::Pallet::<crate::Runtime>::escrow_id(), UNIT));
 	build_struct_json_patch!(RuntimeGenesisConfig {
 		balances: BalancesConfig { balances: endowed },
 		aura: pallet_aura::GenesisConfig {
@@ -51,7 +53,9 @@ fn dev_node(seed: Sr25519Keyring, ed: Ed25519Keyring) -> NodeKeys {
 /// separate account from Alice so the offchain worker's commits and reveals never compete with
 /// Alice's own transactions for nonces.
 pub fn dev_verifier() -> AccountId {
-	AccountId::from(hex("ea6f32f09e566804971c3ec4b05f404be58f1f6a1ad8f8dcd30381ad5312c20e"))
+	AccountId::from(hex(
+		"ea6f32f09e566804971c3ec4b05f404be58f1f6a1ad8f8dcd30381ad5312c20e",
+	))
 }
 
 fn dev_endowed() -> Vec<(AccountId, u128)> {
@@ -100,7 +104,10 @@ fn original_nodes() -> Vec<NodeKeys> {
 
 fn original_network(root: &str) -> Value {
 	let nodes = original_nodes();
-	let endowed = nodes.iter().map(|(sr, _)| (AccountId::from(*sr), 1_000 * UNIT)).collect();
+	let endowed = nodes
+		.iter()
+		.map(|(sr, _)| (AccountId::from(*sr), 1_000 * UNIT))
+		.collect();
 	wika_genesis(nodes, endowed, AccountId::from(hex(root)), vec![])
 }
 
@@ -117,10 +124,12 @@ pub fn get_preset(id: &PresetId) -> Option<Vec<u8>> {
 	let patch = match id.as_ref() {
 		sp_genesis_builder::DEV_RUNTIME_PRESET => development_config_genesis(),
 		sp_genesis_builder::LOCAL_TESTNET_RUNTIME_PRESET => local_config_genesis(),
-		WIKA_TESTNET_PRESET =>
-			original_network("56442d2ddbace4927f284c799c0e706ce7e0df06f395e2c1bbfb967ece5cf053"),
-		WIKA_MAINNET_PRESET =>
-			original_network("a47f12db28111cfc0052494f434f4bf2cd316dcd13852d6f64e538d861c23534"),
+		WIKA_TESTNET_PRESET => {
+			original_network("56442d2ddbace4927f284c799c0e706ce7e0df06f395e2c1bbfb967ece5cf053")
+		}
+		WIKA_MAINNET_PRESET => {
+			original_network("a47f12db28111cfc0052494f434f4bf2cd316dcd13852d6f64e538d861c23534")
+		}
 		_ => return None,
 	};
 	Some(

@@ -48,6 +48,16 @@ use super::{
 };
 
 impl_runtime_apis! {
+	impl pallet_likes::economics::EconomicsApi<Block, AccountId, crate::BlockNumber> for Runtime {
+		fn page(target:pallet_likes::referrals::Page)->Result<pallet_likes::economics::PageEconomics<AccountId,crate::BlockNumber>,sp_runtime::DispatchError>{crate::Likes::page_economics(&target)}
+		fn quote(payer:AccountId,target:pallet_likes::referrals::Page,source:pallet_likes::referrals::Page,count:u32,authorization_id:u64)->Result<pallet_likes::economics::EconomicTerms<AccountId>,sp_runtime::DispatchError>{crate::Likes::economic_terms(&payer,&target,&source,count,authorization_id)}
+	}
+
+	impl pallet_likes::referrals::ReferralApi<Block, AccountId> for Runtime {
+		fn quote(payer: AccountId, target: pallet_likes::referrals::Page, source: pallet_likes::referrals::Page, count: u32, authorization_id: u64) -> Result<pallet_likes::ReferralTerms<AccountId>, sp_runtime::DispatchError> {
+			crate::Likes::referral_terms(&payer, &target, &source, count, authorization_id)
+		}
+	}
 	impl sp_api::Core<Block> for Runtime {
 		fn version() -> RuntimeVersion {
 			VERSION

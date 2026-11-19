@@ -1,0 +1,1400 @@
+{
+  "schemaVersion": 1,
+  "consumer": "etl (runtime 404 page economics development baseline)",
+  "description": "SubQuery mappings: named events, their positional payloads, and block heights.",
+  "requirements": {
+    "events": {
+      "likes.HostAuthorized": {
+        "fields": [
+          {
+            "name": "source",
+            "type": "Bytes"
+          },
+          {
+            "name": "period",
+            "type": "u64"
+          },
+          {
+            "name": "owner",
+            "type": "AccountId32"
+          },
+          {
+            "name": "public_key",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          },
+          {
+            "name": "authorization_id",
+            "type": "u64"
+          }
+        ]
+      },
+      "likes.HostRevoked": {
+        "fields": [
+          {
+            "name": "source",
+            "type": "Bytes"
+          },
+          {
+            "name": "period",
+            "type": "u64"
+          },
+          {
+            "name": "owner",
+            "type": "AccountId32"
+          },
+          {
+            "name": "public_key",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          },
+          {
+            "name": "authorization_id",
+            "type": "u64"
+          }
+        ]
+      },
+      "likes.ReferralPaid": {
+        "fields": [
+          {
+            "name": "version",
+            "type": "u16"
+          },
+          {
+            "name": "payer",
+            "type": "AccountId32"
+          },
+          {
+            "name": "target",
+            "type": "Bytes"
+          },
+          {
+            "name": "source",
+            "type": "Bytes"
+          },
+          {
+            "name": "source_period",
+            "type": "u64"
+          },
+          {
+            "name": "authorization_id",
+            "type": "u64"
+          },
+          {
+            "name": "request_id",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          },
+          {
+            "name": "recipient",
+            "type": "AccountId32"
+          },
+          {
+            "name": "amount",
+            "type": "u128"
+          },
+          {
+            "name": "count",
+            "type": "u32"
+          },
+          {
+            "name": "terms_version",
+            "type": "u16"
+          },
+          {
+            "name": "terms_hash",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          }
+        ]
+      },
+      "likes.EconomicsScheduled": {
+        "fields": [
+          {
+            "name": "boundary",
+            "type": "u32"
+          },
+          {
+            "name": "rules",
+            "type": {
+              "struct": {
+                "version": "u32",
+                "owner_min": "u16",
+                "owner_max": "u16",
+                "supporter_min": "u16",
+                "supporter_max": "u16",
+                "referral_min": "u16",
+                "referral_max": "u16",
+                "protocol_bps": "u16",
+                "minimum_price": "u128",
+                "treasury": "AccountId32"
+              }
+            }
+          },
+          {
+            "name": "profile",
+            "type": {
+              "struct": {
+                "ruleset": "u32",
+                "revision": "u64",
+                "model": "u8",
+                "owner_bps": "u16",
+                "supporter_bps": "u16",
+                "referral_bps": "u16",
+                "protocol_bps": "u16",
+                "rounds": "u8",
+                "treasury": "AccountId32",
+                "configurator": {
+                  "option": "AccountId32"
+                },
+                "owner_period": {
+                  "option": "u64"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "likes.EconomicsActivated": {
+        "fields": [
+          {
+            "name": "boundary",
+            "type": "u32"
+          },
+          {
+            "name": "legacy",
+            "type": {
+              "struct": {
+                "ruleset": "u32",
+                "revision": "u64",
+                "model": "u8",
+                "owner_bps": "u16",
+                "supporter_bps": "u16",
+                "referral_bps": "u16",
+                "protocol_bps": "u16",
+                "rounds": "u8",
+                "treasury": "AccountId32",
+                "configurator": {
+                  "option": "AccountId32"
+                },
+                "owner_period": {
+                  "option": "u64"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "likes.DefaultPublished": {
+        "fields": [
+          {
+            "name": "profile",
+            "type": {
+              "struct": {
+                "ruleset": "u32",
+                "revision": "u64",
+                "model": "u8",
+                "owner_bps": "u16",
+                "supporter_bps": "u16",
+                "referral_bps": "u16",
+                "protocol_bps": "u16",
+                "rounds": "u8",
+                "treasury": "AccountId32",
+                "configurator": {
+                  "option": "AccountId32"
+                },
+                "owner_period": {
+                  "option": "u64"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "likes.PolicyConfigured": {
+        "fields": [
+          {
+            "name": "page",
+            "type": "Bytes"
+          },
+          {
+            "name": "policy_hash",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          },
+          {
+            "name": "policy",
+            "type": {
+              "struct": {
+                "ruleset": "u32",
+                "revision": "u64",
+                "model": "u8",
+                "owner_bps": "u16",
+                "supporter_bps": "u16",
+                "referral_bps": "u16",
+                "protocol_bps": "u16",
+                "rounds": "u8",
+                "treasury": "AccountId32",
+                "configurator": {
+                  "option": "AccountId32"
+                },
+                "owner_period": {
+                  "option": "u64"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "likes.PolicyLocked": {
+        "fields": [
+          {
+            "name": "page",
+            "type": "Bytes"
+          },
+          {
+            "name": "policy_hash",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          }
+        ]
+      },
+      "likes.SupporterPaid": {
+        "fields": [
+          {
+            "name": "page",
+            "type": "Bytes"
+          },
+          {
+            "name": "payer",
+            "type": "AccountId32"
+          },
+          {
+            "name": "recipient",
+            "type": "AccountId32"
+          },
+          {
+            "name": "amount",
+            "type": "u128"
+          }
+        ]
+      },
+      "likes.PaymentDistribution": {
+        "fields": [
+          {
+            "name": "payer",
+            "type": "AccountId32"
+          },
+          {
+            "name": "target",
+            "type": "Bytes"
+          },
+          {
+            "name": "terms_hash",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          },
+          {
+            "name": "receipt",
+            "type": {
+              "struct": {
+                "version": "u16",
+                "policy_hash": {
+                  "array": {
+                    "length": 32,
+                    "type": "u8"
+                  }
+                },
+                "revision": "u64",
+                "model": "u8",
+                "gross": "u128",
+                "debit": "u128",
+                "retained": "u128",
+                "legacy_dust": "u128",
+                "owner_credit": "u128",
+                "supporter_budget": "u128",
+                "supporter_paid": "u128",
+                "supporter_fallback": "u128",
+                "referral_recipient": "AccountId32",
+                "referral_credit": "u128",
+                "referral_to_target": "bool",
+                "protocol_recipient": "AccountId32",
+                "protocol_credit": "u128"
+              }
+            }
+          }
+        ]
+      },
+      "likes.Liked": {
+        "fields": [
+          {
+            "name": "who",
+            "type": "AccountId32"
+          },
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "num_likes",
+            "type": "u32"
+          }
+        ]
+      },
+      "owners.ClaimPolicyRequested": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "attempt",
+            "type": "u64"
+          },
+          {
+            "name": "account",
+            "type": "AccountId32"
+          },
+          {
+            "name": "proof_digest",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          },
+          {
+            "name": "selection",
+            "type": {
+              "struct": {
+                "owner_bps": "u16",
+                "supporter_bps": "u16",
+                "referral_bps": "u16",
+                "ruleset": "u32",
+                "expected_revision": "u64",
+                "expected_hash": {
+                  "array": {
+                    "length": 32,
+                    "type": "u8"
+                  }
+                },
+                "inherit_if_changed": "bool"
+              }
+            }
+          }
+        ]
+      },
+      "owners.ClaimPolicyOutcome": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "attempt",
+            "type": "u64"
+          },
+          {
+            "name": "account",
+            "type": "AccountId32"
+          },
+          {
+            "name": "applied",
+            "type": "bool"
+          },
+          {
+            "name": "reason",
+            "type": {
+              "variant": {
+                "Applied": {
+                  "struct": {}
+                },
+                "Locked": {
+                  "struct": {}
+                },
+                "TermsChanged": {
+                  "struct": {}
+                }
+              }
+            }
+          }
+        ]
+      },
+      "owners.ReplacementOpened": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "id",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          },
+          {
+            "name": "previous_period",
+            "type": "u64"
+          },
+          {
+            "name": "candidate",
+            "type": "AccountId32"
+          },
+          {
+            "name": "earliest_activation",
+            "type": "u64"
+          },
+          {
+            "name": "deadline",
+            "type": "u64"
+          },
+          {
+            "name": "bond",
+            "type": "u128"
+          }
+        ]
+      },
+      "owners.ReplacementClosed": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "id",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          },
+          {
+            "name": "activated",
+            "type": "bool"
+          }
+        ]
+      },
+      "owners.ReplacementApproved": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "id",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          },
+          {
+            "name": "account",
+            "type": "AccountId32"
+          }
+        ]
+      },
+      "owners.ReplacementObjected": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "id",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          },
+          {
+            "name": "account",
+            "type": "AccountId32"
+          }
+        ]
+      },
+      "owners.BondSettled": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "account",
+            "type": "AccountId32"
+          },
+          {
+            "name": "amount",
+            "type": "u128"
+          },
+          {
+            "name": "forfeited",
+            "type": "bool"
+          }
+        ]
+      },
+      "owners.OwnershipPeriodClosed": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "period",
+            "type": "u64"
+          },
+          {
+            "name": "ended_at",
+            "type": "u64"
+          }
+        ]
+      },
+      "owners.AuthorRewardAccrued": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "period",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "amount",
+            "type": "u128"
+          }
+        ]
+      },
+      "owners.OwnershipPeriodActivated": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "period",
+            "type": "u64"
+          },
+          {
+            "name": "account",
+            "type": "AccountId32"
+          },
+          {
+            "name": "started_at",
+            "type": "u64"
+          },
+          {
+            "name": "backlog",
+            "type": "u128"
+          },
+          {
+            "name": "proof_digest",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          }
+        ]
+      },
+      "owners.ClaimVerificationRequested": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "purpose",
+            "type": {
+              "variant": {
+                "Initial": {
+                  "struct": {}
+                },
+                "Refresh": {
+                  "tuple": [
+                    "u64"
+                  ]
+                },
+                "ReplacementInitial": {
+                  "struct": {}
+                },
+                "ReplacementFinal": {
+                  "tuple": [
+                    {
+                      "array": {
+                        "length": 32,
+                        "type": "u8"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "name": "account",
+            "type": "AccountId32"
+          },
+          {
+            "name": "expires_at",
+            "type": "u64"
+          },
+          {
+            "name": "proof_digest",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          }
+        ]
+      },
+      "owners.ClaimTransitionFailed": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "error",
+            "type": "DispatchError"
+          }
+        ]
+      },
+      "owners.ClaimVerificationFinished": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "purpose",
+            "type": {
+              "variant": {
+                "Initial": {
+                  "struct": {}
+                },
+                "Refresh": {
+                  "tuple": [
+                    "u64"
+                  ]
+                },
+                "ReplacementInitial": {
+                  "struct": {}
+                },
+                "ReplacementFinal": {
+                  "tuple": [
+                    {
+                      "array": {
+                        "length": 32,
+                        "type": "u8"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "name": "outcome",
+            "type": {
+              "variant": {
+                "Approved": {
+                  "struct": {}
+                },
+                "Expired": {
+                  "struct": {}
+                },
+                "InvalidProof": {
+                  "struct": {}
+                },
+                "Inconclusive": {
+                  "struct": {}
+                }
+              }
+            }
+          },
+          {
+            "name": "checked_at",
+            "type": "u64"
+          }
+        ]
+      },
+      "owners.AuthorRewardsWithdrawn": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "period",
+            "type": "u64"
+          },
+          {
+            "name": "account",
+            "type": "AccountId32"
+          },
+          {
+            "name": "amount",
+            "type": "u128"
+          }
+        ]
+      },
+      "owners.VerifierAdded": {
+        "fields": [
+          {
+            "name": "account",
+            "type": "AccountId32"
+          }
+        ]
+      },
+      "owners.VerifierEnabled": {
+        "fields": [
+          {
+            "name": "account",
+            "type": "AccountId32"
+          }
+        ]
+      },
+      "owners.VerifierDisabled": {
+        "fields": [
+          {
+            "name": "account",
+            "type": "AccountId32"
+          }
+        ]
+      },
+      "owners.VerificationFinished": {
+        "fields": [
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "outcome",
+            "type": {
+              "variant": {
+                "Approved": {
+                  "struct": {}
+                },
+                "Expired": {
+                  "struct": {}
+                },
+                "InvalidProof": {
+                  "struct": {}
+                },
+                "Inconclusive": {
+                  "struct": {}
+                }
+              }
+            }
+          },
+          {
+            "name": "electorate",
+            "type": "u32"
+          },
+          {
+            "name": "threshold",
+            "type": "u32"
+          },
+          {
+            "name": "matching",
+            "type": "u32"
+          }
+        ]
+      },
+      "owners.UrlCheckRequested": {
+        "fields": [
+          {
+            "name": "account",
+            "type": "AccountId32"
+          },
+          {
+            "name": "url",
+            "type": "Bytes"
+          }
+        ]
+      },
+      "owners.UrlCheckCommitted": {
+        "fields": [
+          {
+            "name": "account",
+            "type": "AccountId32"
+          },
+          {
+            "name": "url",
+            "type": "Bytes"
+          }
+        ]
+      },
+      "owners.UrlCheckRevealed": {
+        "fields": [
+          {
+            "name": "account",
+            "type": "AccountId32"
+          },
+          {
+            "name": "url",
+            "type": "Bytes"
+          }
+        ]
+      },
+      "owners.UrlOwnerRegistered": {
+        "fields": [
+          {
+            "name": "account",
+            "type": "AccountId32"
+          },
+          {
+            "name": "url",
+            "type": "Bytes"
+          },
+          {
+            "name": "block",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    "storage": {
+      "system.number": {
+        "modifier": "Default",
+        "keys": [],
+        "value": "u32"
+      },
+      "likes.hostKeys": {
+        "modifier": "Default",
+        "keys": [
+          "Bytes"
+        ],
+        "hashers": [
+          "Blake2_128Concat"
+        ],
+        "value": {
+          "sequence": {
+            "tuple": [
+              "u64",
+              "u64",
+              {
+                "array": {
+                  "length": 32,
+                  "type": "u8"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "likes.usedRequests": {
+        "modifier": "Optional",
+        "keys": [
+          "u64",
+          {
+            "array": {
+              "length": 32,
+              "type": "u8"
+            }
+          }
+        ],
+        "hashers": [
+          "Twox64Concat",
+          "Blake2_128Concat"
+        ],
+        "value": "u64"
+      },
+      "likes.economicRules": {
+        "modifier": "Optional",
+        "keys": [],
+        "hashers": [],
+        "value": {
+          "struct": {
+            "version": "u32",
+            "owner_min": "u16",
+            "owner_max": "u16",
+            "supporter_min": "u16",
+            "supporter_max": "u16",
+            "referral_min": "u16",
+            "referral_max": "u16",
+            "protocol_bps": "u16",
+            "minimum_price": "u128",
+            "treasury": "AccountId32"
+          }
+        }
+      },
+      "likes.defaultProfile": {
+        "modifier": "Optional",
+        "keys": [],
+        "hashers": [],
+        "value": {
+          "struct": {
+            "ruleset": "u32",
+            "revision": "u64",
+            "model": "u8",
+            "owner_bps": "u16",
+            "supporter_bps": "u16",
+            "referral_bps": "u16",
+            "protocol_bps": "u16",
+            "rounds": "u8",
+            "treasury": "AccountId32",
+            "configurator": {
+              "option": "AccountId32"
+            },
+            "owner_period": {
+              "option": "u64"
+            }
+          }
+        }
+      },
+      "likes.legacyProfile": {
+        "modifier": "Optional",
+        "keys": [],
+        "hashers": [],
+        "value": {
+          "struct": {
+            "ruleset": "u32",
+            "revision": "u64",
+            "model": "u8",
+            "owner_bps": "u16",
+            "supporter_bps": "u16",
+            "referral_bps": "u16",
+            "protocol_bps": "u16",
+            "rounds": "u8",
+            "treasury": "AccountId32",
+            "configurator": {
+              "option": "AccountId32"
+            },
+            "owner_period": {
+              "option": "u64"
+            }
+          }
+        }
+      },
+      "likes.economicsBoundary": {
+        "modifier": "Optional",
+        "keys": [],
+        "hashers": [],
+        "value": "u32"
+      },
+      "likes.economicsActive": {
+        "modifier": "Default",
+        "keys": [],
+        "hashers": [],
+        "value": "bool"
+      },
+      "likes.pagePolicies": {
+        "modifier": "Optional",
+        "keys": [
+          "Bytes"
+        ],
+        "hashers": [
+          "Blake2_128Concat"
+        ],
+        "value": {
+          "struct": {
+            "ruleset": "u32",
+            "revision": "u64",
+            "model": "u8",
+            "owner_bps": "u16",
+            "supporter_bps": "u16",
+            "referral_bps": "u16",
+            "protocol_bps": "u16",
+            "rounds": "u8",
+            "treasury": "AccountId32",
+            "configurator": {
+              "option": "AccountId32"
+            },
+            "owner_period": {
+              "option": "u64"
+            }
+          }
+        }
+      },
+      "likes.policyLocks": {
+        "modifier": "Optional",
+        "keys": [
+          "Bytes"
+        ],
+        "hashers": [
+          "Blake2_128Concat"
+        ],
+        "value": "u32"
+      },
+      "owners.policyIntents": {
+        "modifier": "Optional",
+        "keys": [
+          "Bytes"
+        ],
+        "hashers": [
+          "Blake2_128Concat"
+        ],
+        "value": {
+          "struct": {
+            "attempt": "u64",
+            "slot": "u16",
+            "account": "AccountId32",
+            "proof_digest": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            },
+            "selection": {
+              "struct": {
+                "owner_bps": "u16",
+                "supporter_bps": "u16",
+                "referral_bps": "u16",
+                "ruleset": "u32",
+                "expected_revision": "u64",
+                "expected_hash": {
+                  "array": {
+                    "length": 32,
+                    "type": "u8"
+                  }
+                },
+                "inherit_if_changed": "bool"
+              }
+            },
+            "expires_at": "u64"
+          }
+        }
+      },
+      "owners.lastPolicyOutcomes": {
+        "modifier": "Optional",
+        "keys": [
+          "Bytes"
+        ],
+        "hashers": [
+          "Blake2_128Concat"
+        ],
+        "value": {
+          "struct": {
+            "attempt": "u64",
+            "account": "AccountId32",
+            "applied": "bool",
+            "reason": {
+              "variant": {
+                "Applied": {
+                  "struct": {}
+                },
+                "Locked": {
+                  "struct": {}
+                },
+                "TermsChanged": {
+                  "struct": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "rpc": [
+      "state_getMetadata",
+      "state_getRuntimeVersion",
+      "chain_getBlockHash",
+      "chain_getHeader",
+      "chain_getBlock",
+      "chain_getFinalizedHead",
+      "chain_subscribeFinalizedHeads",
+      "state_getStorage",
+      "state_queryStorageAt"
+    ],
+    "exhaustiveEvents": [
+      "owners"
+    ],
+    "calls": {
+      "likes.authorizeHost": {
+        "fields": [
+          {
+            "name": "source",
+            "type": "Bytes"
+          },
+          {
+            "name": "public_key",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          }
+        ]
+      },
+      "likes.revokeHost": {
+        "fields": [
+          {
+            "name": "source",
+            "type": "Bytes"
+          },
+          {
+            "name": "authorization_id",
+            "type": "u64"
+          }
+        ]
+      },
+      "likes.likeWithReferral": {
+        "fields": [
+          {
+            "name": "payload",
+            "type": {
+              "struct": {
+                "domain": {
+                  "array": {
+                    "length": 18,
+                    "type": "u8"
+                  }
+                },
+                "version": "u16",
+                "genesis_hash": {
+                  "array": {
+                    "length": 32,
+                    "type": "u8"
+                  }
+                },
+                "source_page": "Bytes",
+                "source_period": "u64",
+                "authorization_id": "u64",
+                "target_page": "Bytes",
+                "payer": "AccountId32",
+                "count": "u32",
+                "request_id": {
+                  "array": {
+                    "length": 32,
+                    "type": "u8"
+                  }
+                },
+                "issued_at": "u64",
+                "expires_at": "u64",
+                "terms_version": "u16",
+                "terms_hash": {
+                  "array": {
+                    "length": 32,
+                    "type": "u8"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "name": "public_key",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          },
+          {
+            "name": "signature",
+            "type": {
+              "array": {
+                "length": 64,
+                "type": "u8"
+              }
+            }
+          }
+        ]
+      },
+      "likes.likeWithTerms": {
+        "fields": [
+          {
+            "name": "target",
+            "type": "Bytes"
+          },
+          {
+            "name": "count",
+            "type": "u32"
+          },
+          {
+            "name": "terms_version",
+            "type": "u16"
+          },
+          {
+            "name": "terms_hash",
+            "type": {
+              "array": {
+                "length": 32,
+                "type": "u8"
+              }
+            }
+          }
+        ]
+      },
+      "likes.configurePagePolicy": {
+        "fields": [
+          {
+            "name": "page",
+            "type": "Bytes"
+          },
+          {
+            "name": "period",
+            "type": "u64"
+          },
+          {
+            "name": "selection",
+            "type": {
+              "struct": {
+                "owner_bps": "u16",
+                "supporter_bps": "u16",
+                "referral_bps": "u16",
+                "ruleset": "u32",
+                "expected_revision": "u64",
+                "expected_hash": {
+                  "array": {
+                    "length": 32,
+                    "type": "u8"
+                  }
+                },
+                "inherit_if_changed": "bool"
+              }
+            }
+          }
+        ]
+      },
+      "likes.scheduleEconomics": {
+        "fields": [
+          {
+            "name": "boundary",
+            "type": "u32"
+          },
+          {
+            "name": "rules",
+            "type": {
+              "struct": {
+                "version": "u32",
+                "owner_min": "u16",
+                "owner_max": "u16",
+                "supporter_min": "u16",
+                "supporter_max": "u16",
+                "referral_min": "u16",
+                "referral_max": "u16",
+                "protocol_bps": "u16",
+                "minimum_price": "u128",
+                "treasury": "AccountId32"
+              }
+            }
+          },
+          {
+            "name": "owner_bps",
+            "type": "u16"
+          },
+          {
+            "name": "supporter_bps",
+            "type": "u16"
+          },
+          {
+            "name": "referral_bps",
+            "type": "u16"
+          },
+          {
+            "name": "rounds",
+            "type": "u8"
+          }
+        ]
+      },
+      "likes.publishDefault": {
+        "fields": [
+          {
+            "name": "owner_bps",
+            "type": "u16"
+          },
+          {
+            "name": "supporter_bps",
+            "type": "u16"
+          },
+          {
+            "name": "referral_bps",
+            "type": "u16"
+          }
+        ]
+      },
+      "owners.claimPageWithPolicy": {
+        "fields": [
+          {
+            "name": "proof",
+            "type": "Bytes"
+          },
+          {
+            "name": "selection",
+            "type": {
+              "struct": {
+                "owner_bps": "u16",
+                "supporter_bps": "u16",
+                "referral_bps": "u16",
+                "ruleset": "u32",
+                "expected_revision": "u64",
+                "expected_hash": {
+                  "array": {
+                    "length": 32,
+                    "type": "u8"
+                  }
+                },
+                "inherit_if_changed": "bool"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "errors": {
+      "likes.SignedReferralRequired": {
+        "fields": []
+      },
+      "likes.TermsChanged": {
+        "fields": []
+      }
+    }
+  },
+  "behavior": [
+    "Financial events replay exact escrow balances from block 1, first-claim backlog and ownership boundaries.",
+    "Closed periods retain original owners and historical withdrawals.",
+    "Replacement, verification, quorum and bond events remain auditable.",
+    "Finalized SubQuery/Postgres records are exposed through GraphQL.",
+    "Signed host requests bind payer, exact page and quoted terms; unsigned referral credit is rejected after activation.",
+    "Owner-configured policies, bounded claim intent, economic terms v2, preserved legacy FIFO and exact distribution receipts."
+  ]
+}

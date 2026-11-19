@@ -5811,6 +5811,8 @@ dependencies = [
  "pallet-balances",
  "parity-scale-codec",
  "scale-info",
+ "serde_json",
+ "sp-api",
  "sp-core",
  "sp-io",
  "sp-runtime",
@@ -5825,9 +5827,11 @@ dependencies = [
  "frame-system",
  "log",
  "pallet-balances",
+ "pallet-likes",
  "parity-scale-codec",
  "parking_lot 0.12.5",
  "scale-info",
+ "serde_json",
  "sp-core",
  "sp-io",
  "sp-keystore",
@@ -11447,6 +11451,12 @@ dependencies = [
 [[package]]
 name = "wika-traits"
 version = "4.0.0"
+dependencies = [
+ "parity-scale-codec",
+ "scale-info",
+ "serde_json",
+ "sp-runtime",
+]
 
 [[package]]
 name = "winapi"

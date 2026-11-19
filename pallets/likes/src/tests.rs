@@ -33,7 +33,14 @@ fn first_like_creates_the_url_and_pays_every_share() {
 		assert_eq!(Urls::<Test>::get(url()), Some((3, ALICE, pot)));
 		assert_eq!(LikesStore::<Test>::get(ALICE, url()), Some((0, 3, 12, pot)));
 		assert_eq!(UrlCount::<Test>::get(), 1);
-		System::assert_last_event(Event::Liked { who: ALICE, url: url(), num_likes: 3 }.into());
+		System::assert_last_event(
+			Event::Liked {
+				who: ALICE,
+				url: url(),
+				num_likes: 3,
+			}
+			.into(),
+		);
 	});
 }
 
@@ -55,7 +62,10 @@ fn later_likes_repay_the_queue_front_first() {
 		assert_eq!(balance(ALICE), 999 * UNIT + 4 * share);
 		assert_eq!(balance(BOB), 998 * UNIT + 3 * share);
 		assert_eq!(LikesStore::<Test>::get(ALICE, url()), Some((0, 1, 0, BOB)));
-		assert_eq!(LikesStore::<Test>::get(BOB, url()), Some((1, 2, 5, CHARLIE)));
+		assert_eq!(
+			LikesStore::<Test>::get(BOB, url()),
+			Some((1, 2, 5, CHARLIE))
+		);
 		assert_eq!(Urls::<Test>::get(url()), Some((8, BOB, CHARLIE)));
 		assert_eq!(UrlCount::<Test>::get(), 1);
 	});
@@ -116,6 +126,17 @@ fn rejects_bad_input() {
 			Likes::like(RuntimeOrigin::signed(ALICE), long, vec![], 1),
 			Error::<Test>::UrlTooLong
 		);
-		assert_ok!(Likes::like(RuntimeOrigin::signed(ALICE), vec![b'a'; 254], vec![], 1));
+		let mut maximum = b"https://example.com/".to_vec();
+		maximum.resize(254, b'a');
+		assert_ok!(Likes::like(
+			RuntimeOrigin::signed(ALICE),
+			maximum,
+			vec![],
+			1
+		));
+		assert_noop!(
+			Likes::like(RuntimeOrigin::signed(BOB), b"not-a-url".to_vec(), vec![], 1),
+			Error::<Test>::InvalidUrl
+		);
 	});
 }
